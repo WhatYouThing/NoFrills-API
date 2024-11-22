@@ -1,0 +1,14 @@
+{
+  "name": "nofrills-api",
+  "module": "index.js",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "nbt-js": "^0.1.0"
+  }
+}
