@@ -1,9 +1,10 @@
 import * as fs from "fs"
 import Bun from "bun"
+import zlib from "zlib"
 import nbtjs from "nbt-js"
 import { urlToHttpOptions, URL } from "node:url"
 
-const config = JSON.parse(fs.readFileSync(`${__dirname}/config.json`).toString())
+const config = await Bun.file(`${__dirname}/config.json`).json()
 const apiKey = !config.apiKey ? process.env.HYPIXEL_API_KEY : config.apiKey
 
 class Limiter {
@@ -47,8 +48,8 @@ class Limiter {
 }
 
 const util = {
-    lastRefresh: {
-        auctionHouse: 0,
+    sinceUpdate: {
+        auctions: 0,
         bazaar: 0
     },
     cache: {
@@ -64,6 +65,34 @@ const util = {
         tooManyRequests: new Response("{}", {
             status: 429
         })
+    },
+    async refreshAuctions() {
+        const res = await makeRequest({
+            url: "v2/skyblock/auctions"
+        })
+        if (res.status == 200) {
+            this.cache.auctionHouse = await res.json()
+        }
+    },
+    async refreshBazaar() {
+        const res = await makeRequest({
+            url: "v2/skyblock/bazaar"
+        })
+        if (res.status == 200) {
+            this.cache.bazaar = await res.json()
+        }
+    },
+    logFile: `${__dirname}/log.txt`,
+    log(message = "") {
+        if (!config.logRequests) {
+            return;
+        }
+        if (!fs.existsSync(this.logFile)) {
+            fs.writeFileSync(this.logFile, `${message}\n`)
+        }
+        else {
+            fs.appendFileSync(this.logFile, `${message}\n`)
+        }
     }
 }
 
@@ -78,8 +107,8 @@ async function makeRequest({ url = "", method = "GET", body = "" }) {
 }
 
 function parseItemData(data = "") {
-    const buffer = new Buffer.from(data, "base64")
-    const gzip = Bun.gunzipSync(buffer)
+    const buffer = Buffer.from(data, "base64")
+    const gzip = zlib.gunzipSync(buffer)
     const nbt = nbtjs.read(gzip)
     return nbt.payload[""]["i"].shift()
 }
@@ -94,6 +123,27 @@ function parseRequestPath(path = "") {
     return path
 }
 
+setInterval(async () => {
+    if (util.sinceUpdate.auctions == 4) { // refesh auctions every 2m30s
+        await util.refreshAuctions()
+        util.sinceUpdate.auctions = 0
+    }
+    else {
+        util.sinceUpdate.auctions += 1
+    }
+    if (util.sinceUpdate.bazaar == 3) { // refesh bazaar every 2m
+        await util.refreshBazaar()
+        util.sinceUpdate.bazaar = 0
+    }
+    else {
+        util.sinceUpdate.bazaar += 1
+    }
+    Bun.gc()
+}, 30000)
+
+await util.refreshAuctions()
+await util.refreshBazaar()
+
 Bun.serve({
     async fetch(req, server) {
         const reqIP = config.cloudflareMode ? req.headers.get("cf-connecting-ip") : server.requestIP(req).address
@@ -101,18 +151,6 @@ Bun.serve({
         const path = parseRequestPath(options.path)
         const time = new Date().getTime();
         const limiter = new Limiter(reqIP, path, time)
-        if (util.lastRefresh.auctionHouse + 150000 > time) {
-            const res = await makeRequest({
-                url: "v2/skyblock/auctions"
-            })
-            util.cache.auctionHouse = await res.json()
-        }
-        if (util.lastRefresh.auctionHouse + 120000 > time) {
-            const res = await makeRequest({
-                url: "v2/skyblock/bazaar"
-            })
-            util.cache.bazaar = await res.json()
-        }
         if (req.method == "GET") {
             if (path == "/v1/player/get-profile") {
                 if (limiter.limited(5)) {
@@ -128,11 +166,43 @@ Bun.serve({
             }
         }
         if (req.method == "POST") {
+            const json = await req.json().catch()
+            if (!json) {
+                return util.responses.badRequest
+            }
             if (path == "/v1/economy/get-attribute-price") {
 
             }
             if (path == "/v1/economy/get-items-price") {
-
+                let auctionItems = []
+                let bazaarItems = []
+                await Promise.all(util.cache.auctionHouse.auctions.map(auction => {
+                    if (auction.bin) {
+                        let data = parseItemData(auction.item_bytes)
+                        let id = data.ExtraAttributes.id
+                        if (json.items.includes(id)) {
+                            let item = auctionItems.find(item => item.id == id)
+                            if (item) {
+                                if (auction.starting_bid < item.price) {
+                                    item.price = Math.ceil(auction.starting_bid)
+                                }
+                            }
+                            else {
+                                auctionItems.push({ id: id, price: Math.ceil(auction.starting_bid) })
+                            }
+                        }
+                    }
+                }))
+                await Promise.all(json.items.map(item => {
+                    let data = util.cache.bazaar.products.item
+                    if (data) {
+                        bazaarItems.push({ id: item, buy: Math.ceil(data.quick_status.buyPrice), sell: Math.ceil(data.quick_status.sellPrice) })
+                    }
+                }))
+                return new Response(JSON.stringify({
+                    auction: auctionItems,
+                    bazaar: bazaarItems
+                }))
             }
         }
         return util.responses.badRequest

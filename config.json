@@ -1,5 +1,6 @@
 {
     "apiKey": "",
     "port": 4269,
+    "logRequests": false,
     "cloudflareMode": false
 }
