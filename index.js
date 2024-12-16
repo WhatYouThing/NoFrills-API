@@ -8,13 +8,12 @@ const config = await Bun.file(`${__dirname}/config.json`).json()
 const apiKey = !config.apiKey ? process.env.HYPIXEL_API_KEY : config.apiKey
 
 class Limiter {
-    ip; endpoint; key; time
+    ip; endpoint; key;
 
-    constructor(ip = "", endpoint = "", time = 0) {
+    constructor(ip = "", endpoint = "") {
         this.ip = ip;
         this.endpoint = endpoint;
         this.key = new Buffer.from(endpoint + ip).toString("base64")
-        this.time = time;
     }
 
     limited(maxRequests = 10) {
@@ -53,160 +52,222 @@ const util = {
         bazaar: 0
     },
     cache: {
-        auctionHouse: undefined,
-        bazaar: undefined,
-        itemPrice: new Map()
+        auction: new Map(),
+        bazaar: new Map(),
+        attribute: new Map()
     },
     rateLimits: new Map(),
-    responses: {
-        badRequest: new Response("{}", {
-            status: 400
-        }),
-        tooManyRequests: new Response("{}", {
-            status: 429
-        })
-    },
     async refreshAuctions() {
-        const res = await makeRequest({
-            url: "v2/skyblock/auctions"
-        })
-        if (res.status == 200) {
-            this.cache.auctionHouse = await res.json()
+        let maxPages = 200
+        let auctions = []
+        this.log(`Refreshing Auction House data...`)
+        for (let page = 0; page < maxPages; page++) {
+            const res = await this.makeRequest({
+                url: `v2/skyblock/auctions?page=${page}`
+            })
+            if (res.status == 200) {
+                const json = await res.json()
+                maxPages = json.totalPages
+                await Promise.all(json.auctions.map(auction => {
+                    auctions.push(auction)
+                }))
+            }
+            else {
+                this.log(`Failed to refresh Auction House data, request for page #${page} returned code ${res.status}.`)
+                this.sinceUpdate.auctions = 0
+                return
+            }
         }
+        const prices = new Map()
+        const attributePrices = new Map()
+        await Promise.all(auctions.map(auction => {
+            if (auction.bin) {
+                const data = this.parseItemData(auction.item_bytes)
+                const extra = data.tag.ExtraAttributes
+                if (extra) {
+                    let id = extra.id
+                    if (id == "PET") {
+                        let petInfo = JSON.parse(extra.petInfo)
+                        id = `${petInfo.type}_PET`
+                    }
+                    let attributes = extra.attributes
+                    let price = Math.ceil(auction.starting_bid)
+                    if (prices.has(id)) {
+                        if (price < prices.get(id)) {
+                            prices.set(id, price)
+                        }
+                    }
+                    else {
+                        prices.set(id, price)
+                    }
+                    if (attributes) {
+                        let entries = Object.entries(attributes)
+                        let rollID = ""
+                        entries.forEach(([name, value]) => { // finds lowest price for every attribute and its level
+                            let attrID = `${name}${value}`
+                            if (entries.length == 2) {
+                                rollID = `${rollID} ${name}`.trim()
+                            }
+                            if (attributePrices.has(attrID)) {
+                                let pricing = attributePrices.get(attrID)
+                                if (!pricing[id] || price < pricing[id]) {
+                                    pricing[id] = price
+                                    attributePrices.set(attrID, pricing)
+                                }
+                            }
+                            else {
+                                let pricing = {}
+                                pricing[id] = price
+                                attributePrices.set(attrID, pricing)
+                            }
+                        })
+                        if (rollID) { // finds lowest price for any attribute combo
+                            if (attributePrices.has(rollID)) {
+                                let pricing = attributePrices.get(rollID)
+                                if (!pricing[id] || price < pricing[id]) {
+                                    pricing[id] = price
+                                    attributePrices.set(rollID, pricing)
+                                }
+                            }
+                            else {
+                                let pricing = {}
+                                pricing[id] = price
+                                attributePrices.set(rollID, pricing)
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        this.cache.auction = prices
+        this.cache.attribute = attributePrices
+        this.sinceUpdate.auctions = 0
+        this.log(`Auction House data refreshed successfully. Cached LBIN prices: ${prices.size}.`)
     },
     async refreshBazaar() {
-        const res = await makeRequest({
+        this.log(`Refreshing Bazaar data...`)
+        const res = await this.makeRequest({
             url: "v2/skyblock/bazaar"
         })
         if (res.status == 200) {
-            this.cache.bazaar = await res.json()
+            const json = await res.json()
+            const prices = new Map()
+            Object.entries(json.products).forEach(([id, data]) => {
+                let buy = Math.ceil(data.quick_status.buyPrice)
+                let sell = Math.ceil(data.quick_status.sellPrice)
+                prices.set(id, [buy, sell])
+            })
+            this.cache.bazaar = prices
+            this.log(`Bazaar data refreshed successfully. Cached Instant Buy/Sell prices: ${prices.size}`)
         }
+        else {
+            this.log(`Failed to refresh Bazaar data, request returned code ${res.status}.`)
+        }
+        this.sinceUpdate.bazaar = 0
+    },
+    async makeRequest({ url = "", method = "GET", body = "" }) {
+        return await fetch(`https://api.hypixel.net/${url}`, {
+            method: method,
+            body: body & method != "GET" ? body : null,
+            headers: {
+                "API-Key": apiKey
+            }
+        })
+    },
+    parseItemData(data = "") {
+        const buffer = Buffer.from(data, "base64")
+        const gzip = zlib.gunzipSync(buffer)
+        const nbt = nbtjs.read(gzip)
+        return nbt.payload[""]["i"].shift()
+    },
+    parseRequestPath(path = "") {
+        if (path.includes("?")) {
+            path = path.split("?").shift()
+        }
+        if (path.endsWith("/")) {
+            path = path.substring(0, path.length - 1)
+        }
+        return path
+    },
+    stringifyMap(map) {
+        return JSON.stringify(Object.fromEntries(map))
     },
     logFile: `${__dirname}/log.txt`,
     log(message = "") {
-        if (!config.logRequests) {
+        if (!config.logging) {
             return;
         }
         if (!fs.existsSync(this.logFile)) {
-            fs.writeFileSync(this.logFile, `${message}\n`)
+            fs.writeFileSync(this.logFile, ``)
         }
-        else {
-            fs.appendFileSync(this.logFile, `${message}\n`)
-        }
+        fs.appendFileSync(this.logFile, `[${new Date().toISOString()}] ${message}\n`)
     }
-}
-
-async function makeRequest({ url = "", method = "GET", body = "" }) {
-    return await fetch(`https://api.hypixel.net/${url}`, {
-        method: method,
-        body: body & method != "GET" ? body : null,
-        headers: {
-            "API-Key": apiKey
-        }
-    })
-}
-
-function parseItemData(data = "") {
-    const buffer = Buffer.from(data, "base64")
-    const gzip = zlib.gunzipSync(buffer)
-    const nbt = nbtjs.read(gzip)
-    return nbt.payload[""]["i"].shift()
-}
-
-function parseRequestPath(path = "") {
-    if (path.includes("?")) {
-        path = path.split("?").shift()
-    }
-    if (path.endsWith("/")) {
-        path = path.substring(0, path.length - 1)
-    }
-    return path
 }
 
 setInterval(async () => {
-    if (util.sinceUpdate.auctions == 4) { // refesh auctions every 2m30s
+    if (util.sinceUpdate.auctions == 9) { // refesh auctions every 5m
         await util.refreshAuctions()
-        util.sinceUpdate.auctions = 0
     }
     else {
-        util.sinceUpdate.auctions += 1
+        util.sinceUpdate.auctions++
     }
     if (util.sinceUpdate.bazaar == 3) { // refesh bazaar every 2m
         await util.refreshBazaar()
-        util.sinceUpdate.bazaar = 0
     }
     else {
-        util.sinceUpdate.bazaar += 1
+        util.sinceUpdate.bazaar++
     }
     Bun.gc()
 }, 30000)
 
-await util.refreshAuctions()
+//await util.refreshAuctions()
 await util.refreshBazaar()
 
 Bun.serve({
     async fetch(req, server) {
         const reqIP = config.cloudflareMode ? req.headers.get("cf-connecting-ip") : server.requestIP(req).address
         const options = urlToHttpOptions(new URL(req.url))
-        const path = parseRequestPath(options.path)
-        const time = new Date().getTime();
-        const limiter = new Limiter(reqIP, path, time)
+        const path = util.parseRequestPath(options.path)
+        const limiter = new Limiter(reqIP, path)
         if (req.method == "GET") {
+            if (path == "/v1/economy/get-item-pricing") {
+                if (limiter.limited(2)) {
+                    return new Response("", { status: 429 })
+                }
+                limiter.add(60000)
+                return new Response(JSON.stringify({
+                    auction: util.stringifyMap(util.cache.auction),
+                    bazaar: util.stringifyMap(util.cache.bazaar)
+                }))
+            }
             if (path == "/v1/player/get-profile") {
                 if (limiter.limited(5)) {
-                    return util.responses.tooManyRequests
+                    return new Response("", { status: 429 })
                 }
                 limiter.add(30000)
             }
             if (path == "/v1/player/list-profiles") {
 
             }
-            if (path == "/v1/player/get-status") {
-
-            }
         }
         if (req.method == "POST") {
-            const json = await req.json().catch()
-            if (!json) {
-                return util.responses.badRequest
-            }
-            if (path == "/v1/economy/get-attribute-price") {
-
-            }
-            if (path == "/v1/economy/get-items-price") {
-                let auctionItems = []
-                let bazaarItems = []
-                await Promise.all(util.cache.auctionHouse.auctions.map(auction => {
-                    if (auction.bin) {
-                        let data = parseItemData(auction.item_bytes)
-                        let id = data.ExtraAttributes.id
-                        if (json.items.includes(id)) {
-                            let item = auctionItems.find(item => item.id == id)
-                            if (item) {
-                                if (auction.starting_bid < item.price) {
-                                    item.price = Math.ceil(auction.starting_bid)
-                                }
-                            }
-                            else {
-                                auctionItems.push({ id: id, price: Math.ceil(auction.starting_bid) })
-                            }
-                        }
+            try {
+                const json = await req.json()
+                if (path == "/v1/economy/get-attribute-price") {
+                    if (limiter.limited(1)) { // only a hard cheater could hit this rate limit
+                        return new Response("", { status: 429 })
                     }
-                }))
-                await Promise.all(json.items.map(item => {
-                    let data = util.cache.bazaar.products.item
-                    if (data) {
-                        bazaarItems.push({ id: item, buy: Math.ceil(data.quick_status.buyPrice), sell: Math.ceil(data.quick_status.sellPrice) })
-                    }
-                }))
-                return new Response(JSON.stringify({
-                    auction: auctionItems,
-                    bazaar: bazaarItems
-                }))
+                    limiter.add(60000)
+                }
+            }
+            catch {
+                return new Response("", { status: 400 })
             }
         }
-        return util.responses.badRequest
+        return new Response("", { status: 400 })
     },
     development: false,
     port: config.port
 })
+
+util.log(config.cloudflareMode ? `Server running on port ${config.port}, Cloudflare mode enabled.` : `Server running on port ${config.port}.`)
