@@ -90,6 +90,10 @@ const util = {
                         let petInfo = JSON.parse(extra.petInfo)
                         id = `${petInfo.type}_PET_${petInfo.tier}`
                     }
+                    if (id == "RUNE") {
+                        let runeInfo = Object.entries(extra.runes).at(0)
+                        id = `${runeInfo[0]}_${runeInfo[1]}_RUNE`
+                    }
                     let attributes = extra.attributes
                     let price = Math.ceil(auction.starting_bid)
                     if (prices.has(id)) {
@@ -237,7 +241,11 @@ Bun.serve({
                 return new Response(JSON.stringify({
                     auction: util.stringifyMap(util.cache.auction),
                     bazaar: util.stringifyMap(util.cache.bazaar)
-                }))
+                }), {
+                    headers: {
+                        "Content-Type": "application/json"
+                    }
+                })
             }
         }
         return new Response("", { status: 400 })
