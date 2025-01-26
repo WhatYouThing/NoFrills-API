@@ -146,7 +146,7 @@ const util = {
         this.cache.auction = prices
         this.cache.attribute = attributePrices
         this.sinceUpdate.auctions = 0
-        this.log(`Auction House data refreshed successfully. Cached LBIN prices: ${prices.size}.`)
+        this.log(`Auction House data refreshed successfully. Cached LBIN prices: ${prices.size}, Total pages: ${maxPages}.`)
     },
     async refreshBazaar() {
         this.log(`Refreshing Bazaar data...`)
@@ -240,7 +240,8 @@ Bun.serve({
                 limiter.add(60000)
                 return new Response(JSON.stringify({
                     auction: util.stringifyMap(util.cache.auction),
-                    bazaar: util.stringifyMap(util.cache.bazaar)
+                    bazaar: util.stringifyMap(util.cache.bazaar),
+                    attribute: util.stringifyMap(util.cache.attribute),
                 }), {
                     headers: {
                         "Content-Type": "application/json"
