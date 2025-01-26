@@ -2,7 +2,7 @@ import * as fs from "fs"
 import Bun from "bun"
 import zlib from "zlib"
 import nbtjs from "nbt-js"
-import { urlToHttpOptions, URL } from "node:url"
+import { URL } from "node:url"
 
 const config = await Bun.file(`${__dirname}/config.json`).json()
 const apiKey = !config.apiKey ? process.env.HYPIXEL_API_KEY : config.apiKey
@@ -88,7 +88,7 @@ const util = {
                     let id = extra.id
                     if (id == "PET") {
                         let petInfo = JSON.parse(extra.petInfo)
-                        id = `${petInfo.type}_PET`
+                        id = `${petInfo.type}_PET_${petInfo.tier}`
                     }
                     let attributes = extra.attributes
                     let price = Math.ceil(auction.starting_bid)
@@ -205,7 +205,7 @@ const util = {
 }
 
 setInterval(async () => {
-    if (util.sinceUpdate.auctions == 9) { // refesh auctions every 5m
+    if (util.sinceUpdate.auctions == 7) { // refesh auction house every 4m
         await util.refreshAuctions()
     }
     else {
@@ -220,14 +220,13 @@ setInterval(async () => {
     Bun.gc()
 }, 30000)
 
-//await util.refreshAuctions()
+await util.refreshAuctions()
 await util.refreshBazaar()
 
 Bun.serve({
     async fetch(req, server) {
         const reqIP = config.cloudflareMode ? req.headers.get("cf-connecting-ip") : server.requestIP(req).address
-        const options = urlToHttpOptions(new URL(req.url))
-        const path = util.parseRequestPath(options.path)
+        const path = util.parseRequestPath(new URL(req.url).pathname)
         const limiter = new Limiter(reqIP, path)
         if (req.method == "GET") {
             if (path == "/v1/economy/get-item-pricing") {
@@ -239,29 +238,6 @@ Bun.serve({
                     auction: util.stringifyMap(util.cache.auction),
                     bazaar: util.stringifyMap(util.cache.bazaar)
                 }))
-            }
-            if (path == "/v1/player/get-profile") {
-                if (limiter.limited(5)) {
-                    return new Response("", { status: 429 })
-                }
-                limiter.add(30000)
-            }
-            if (path == "/v1/player/list-profiles") {
-
-            }
-        }
-        if (req.method == "POST") {
-            try {
-                const json = await req.json()
-                if (path == "/v1/economy/get-attribute-price") {
-                    if (limiter.limited(1)) { // only a hard cheater could hit this rate limit
-                        return new Response("", { status: 429 })
-                    }
-                    limiter.add(60000)
-                }
-            }
-            catch {
-                return new Response("", { status: 400 })
             }
         }
         return new Response("", { status: 400 })
