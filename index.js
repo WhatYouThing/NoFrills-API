@@ -49,17 +49,20 @@ class Limiter {
 const util = {
     sinceUpdate: {
         auctions: 0,
-        bazaar: 0
+        bazaar: 0,
+        npc: 0
     },
     cache: {
         auction: new Map(),
         bazaar: new Map(),
-        attribute: new Map()
+        attribute: new Map(),
+        npc: new Map()
     },
     rateLimits: new Map(),
     async refreshAuctions() {
         let maxPages = 200
         let auctions = []
+        this.sinceUpdate.auctions = new Date().getTime()
         this.log(`Refreshing Auction House data...`)
         for (let page = 0; page < maxPages; page++) {
             const res = await this.makeRequest({
@@ -74,7 +77,6 @@ const util = {
             }
             else {
                 this.log(`Failed to refresh Auction House data, request for page #${page} returned code ${res.status}.`)
-                this.sinceUpdate.auctions = 0
                 return
             }
         }
@@ -145,10 +147,10 @@ const util = {
         }))
         this.cache.auction = prices
         this.cache.attribute = attributePrices
-        this.sinceUpdate.auctions = 0
         this.log(`Auction House data refreshed successfully. Cached LBIN prices: ${prices.size}, Total pages: ${maxPages}.`)
     },
     async refreshBazaar() {
+        this.sinceUpdate.bazaar = new Date().getTime()
         this.log(`Refreshing Bazaar data...`)
         const res = await this.makeRequest({
             url: "v2/skyblock/bazaar"
@@ -157,8 +159,8 @@ const util = {
             const json = await res.json()
             const prices = new Map()
             Object.entries(json.products).forEach(([id, data]) => {
-                let buy = Math.ceil(data.quick_status.buyPrice)
-                let sell = Math.ceil(data.quick_status.sellPrice)
+                let buy = data.buy_summary[0] ? data.buy_summary[0].pricePerUnit : 0
+                let sell = data.sell_summary[0] ? data.sell_summary[0].pricePerUnit : 0
                 prices.set(id, [buy, sell])
             })
             this.cache.bazaar = prices
@@ -167,7 +169,36 @@ const util = {
         else {
             this.log(`Failed to refresh Bazaar data, request returned code ${res.status}.`)
         }
-        this.sinceUpdate.bazaar = 0
+    },
+    async refreshNPC() {
+        this.sinceUpdate.npc = new Date().getTime()
+        this.log(`Refreshing NPC price data...`)
+        const res = await this.makeRequest({
+            url: "v2/resources/skyblock/items"
+        })
+        if (res.status == 200) {
+            const json = await res.json()
+            const prices = new Map()
+            json.items.map(item => {
+                let coins = item.npc_sell_price
+                let motes = item.motes_sell_price
+                let pricing = {}
+                if (coins) {
+                    pricing["coin"] = coins
+                }
+                if (motes) {
+                    pricing["mote"] = motes
+                }
+                if (pricing) {
+                    prices.set(item.id, pricing)
+                }
+            })
+            this.cache.npc = prices
+            this.log(`NPC price data refreshed successfully. Cached prices: ${prices.size}`)
+        }
+        else {
+            this.log(`Failed to refresh NPC price data, request returned code ${res.status}.`)
+        }
     },
     async makeRequest({ url = "", method = "GET", body = "" }) {
         return await fetch(`https://api.hypixel.net/${url}`, {
@@ -209,23 +240,17 @@ const util = {
 }
 
 setInterval(async () => {
-    if (util.sinceUpdate.auctions == 7) { // refesh auction house every 4m
+    const time = new Date().getTime()
+    if (time - util.sinceUpdate.auctions >= 240000) {
         await util.refreshAuctions()
     }
-    else {
-        util.sinceUpdate.auctions++
-    }
-    if (util.sinceUpdate.bazaar == 3) { // refesh bazaar every 2m
+    if (time - util.sinceUpdate.bazaar >= 120000) {
         await util.refreshBazaar()
     }
-    else {
-        util.sinceUpdate.bazaar++
+    if (time - util.sinceUpdate.npc >= 1800000) {
+        await util.refreshNPC()
     }
-    Bun.gc()
-}, 30000)
-
-await util.refreshAuctions()
-await util.refreshBazaar()
+}, 1000)
 
 Bun.serve({
     async fetch(req, server) {
@@ -234,7 +259,7 @@ Bun.serve({
         const limiter = new Limiter(reqIP, path)
         if (req.method == "GET") {
             if (path == "/v1/economy/get-item-pricing") {
-                if (limiter.limited(2)) {
+                if (limiter.limited(3)) {
                     return new Response("", { status: 429 })
                 }
                 limiter.add(60000)
@@ -242,6 +267,7 @@ Bun.serve({
                     auction: util.stringifyMap(util.cache.auction),
                     bazaar: util.stringifyMap(util.cache.bazaar),
                     attribute: util.stringifyMap(util.cache.attribute),
+                    npc: util.stringifyMap(util.cache.npc),
                 }), {
                     headers: {
                         "Content-Type": "application/json"
@@ -252,7 +278,8 @@ Bun.serve({
         return new Response("", { status: 400 })
     },
     development: false,
-    port: config.port
+    port: config.port,
+    hostname: "127.0.0.1"
 })
 
 util.log(config.cloudflareMode ? `Server running on port ${config.port}, Cloudflare mode enabled.` : `Server running on port ${config.port}.`)
