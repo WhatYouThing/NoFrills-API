@@ -1,8 +1,7 @@
 import * as fs from "fs"
-import Bun from "bun"
-import zlib from "zlib"
 import nbtjs from "nbt-js"
 import { URL } from "node:url"
+import zlib from "zlib"
 
 const config = await Bun.file(`${__dirname}/config.json`).json()
 const apiKey = !config.apiKey ? process.env.HYPIXEL_API_KEY : config.apiKey
@@ -13,7 +12,7 @@ class Limiter {
     constructor(ip = "", endpoint = "") {
         this.ip = ip;
         this.endpoint = endpoint;
-        this.key = new Buffer.from(endpoint + ip).toString("base64")
+        this.key = `${ip}+${endpoint}`
     }
 
     limited(maxRequests = 10) {
@@ -179,20 +178,20 @@ const util = {
         if (res.status == 200) {
             const json = await res.json()
             const prices = new Map()
-            json.items.map(item => {
-                let coins = item.npc_sell_price
-                let motes = item.motes_sell_price
+            await Promise.all(json.items.map(item => {
+                const coins = item.npc_sell_price
+                const motes = item.motes_sell_price
                 let pricing = {}
-                if (coins) {
-                    pricing["coin"] = coins
+                if (typeof coins == "number") {
+                    pricing.coin = coins
                 }
-                if (motes) {
-                    pricing["mote"] = motes
+                if (typeof motes == "number") {
+                    pricing.mote = motes
                 }
-                if (pricing) {
+                if (typeof pricing.coin == "number" || typeof pricing.mote == "number") {
                     prices.set(item.id, pricing)
                 }
-            })
+            }))
             this.cache.npc = prices
             this.log(`NPC price data refreshed successfully. Cached prices: ${prices.size}`)
         }
