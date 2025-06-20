@@ -52,10 +52,11 @@ pub async fn fetch_auctions_list() -> Vec<Value> {
             );
             return Vec::new();
         }
-        let json = util::parse_json(req.unwrap());
-        let auction_list = json["auctions"].as_array().unwrap();
-        auctions.append(&mut auction_list.to_owned());
-        max_pages = json["totalPages"].as_i64().unwrap() - 1;
+        if let Some(json) = util::parse_json(req.unwrap()) {
+            let auction_list = json["auctions"].as_array().unwrap();
+            auctions.append(&mut auction_list.to_owned());
+            max_pages = json["totalPages"].as_i64().unwrap() - 1;
+        }
         page += 1;
     }
     return auctions;
@@ -147,30 +148,31 @@ pub async fn refresh_bazaar() {
         );
     } else {
         let mut bazaar_prices = json!({});
-        let json = util::parse_json(req.unwrap());
-        let products = json["products"].as_object().unwrap();
-        for (id, data) in products.iter() {
-            let buy_summary = data["buy_summary"].as_array().unwrap();
-            let sell_summary = data["sell_summary"].as_array().unwrap();
-            if !bazaar_prices[id].is_object() {
-                bazaar_prices[id] = json!({});
+        if let Some(json) = util::parse_json(req.unwrap()) {
+            let products = json["products"].as_object().unwrap();
+            for (id, data) in products.iter() {
+                let buy_summary = data["buy_summary"].as_array().unwrap();
+                let sell_summary = data["sell_summary"].as_array().unwrap();
+                if !bazaar_prices[id].is_object() {
+                    bazaar_prices[id] = json!({});
+                }
+                bazaar_prices[id]["buy"] = json!(if buy_summary.len() > 0 {
+                    buy_summary.first().unwrap()["pricePerUnit"]
+                        .as_f64()
+                        .unwrap()
+                } else {
+                    0.0
+                });
+                bazaar_prices[id]["sell"] = json!(if sell_summary.len() > 0 {
+                    sell_summary.first().unwrap()["pricePerUnit"]
+                        .as_f64()
+                        .unwrap()
+                } else {
+                    0.0
+                });
             }
-            bazaar_prices[id]["buy"] = json!(if buy_summary.len() > 0 {
-                buy_summary.first().unwrap()["pricePerUnit"]
-                    .as_f64()
-                    .unwrap()
-            } else {
-                0.0
-            });
-            bazaar_prices[id]["sell"] = json!(if sell_summary.len() > 0 {
-                sell_summary.first().unwrap()["pricePerUnit"]
-                    .as_f64()
-                    .unwrap()
-            } else {
-                0.0
-            });
+            update_pricing("bazaar", bazaar_prices).await;
         }
-        update_pricing("bazaar", bazaar_prices).await;
     }
 }
 
@@ -180,22 +182,23 @@ pub async fn refresh_npc() {
         println!("Panicked while refreshing NPC data:\n{}", req.unwrap_err());
     } else {
         let mut npc_prices = json!({});
-        let json = util::parse_json(req.unwrap());
-        let items = json["items"].as_array().unwrap();
-        for item in items {
-            let id = item["id"].as_str().unwrap();
-            let coins_price = item["npc_sell_price"].as_f64();
-            let motes_price = item["motes_sell_price"].as_f64();
-            if coins_price.is_some() || motes_price.is_some() {
-                npc_prices[id] = json!({});
-                if coins_price.is_some() {
-                    npc_prices[id]["coin"] = json!(coins_price.unwrap());
-                }
-                if motes_price.is_some() {
-                    npc_prices[id]["mote"] = json!(motes_price.unwrap());
+        if let Some(json) = util::parse_json(req.unwrap()) {
+            let items = json["items"].as_array().unwrap();
+            for item in items {
+                let id = item["id"].as_str().unwrap();
+                let coins_price = item["npc_sell_price"].as_f64();
+                let motes_price = item["motes_sell_price"].as_f64();
+                if coins_price.is_some() || motes_price.is_some() {
+                    npc_prices[id] = json!({});
+                    if coins_price.is_some() {
+                        npc_prices[id]["coin"] = json!(coins_price.unwrap());
+                    }
+                    if motes_price.is_some() {
+                        npc_prices[id]["mote"] = json!(motes_price.unwrap());
+                    }
                 }
             }
+            update_pricing("npc", npc_prices).await;
         }
-        update_pricing("npc", npc_prices).await;
     }
 }

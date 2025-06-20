@@ -1,13 +1,16 @@
 use std::{env, io::Read};
 
-use base64::{engine::general_purpose, Engine};
+use base64::{Engine, engine::general_purpose};
 use crab_nbt::NbtCompound;
 use flate2::bufread::GzDecoder;
 use serde_json::Value;
-use ureq::{Agent, Body};
+use ureq::{Agent, Body, config::AutoHeaderValue};
 
 fn get_http_agent() -> Agent {
-    return Agent::config_builder().build().new_agent();
+    return Agent::config_builder()
+        .accept_encoding(AutoHeaderValue::None)
+        .build()
+        .new_agent();
 }
 
 pub async fn make_request(url: &str) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
@@ -17,9 +20,12 @@ pub async fn make_request(url: &str) -> Result<ureq::http::Response<ureq::Body>,
         .call();
 }
 
-pub fn parse_json(mut req: ureq::http::Response<Body>) -> Value {
-    let json: Value = serde_json::from_reader(req.body_mut().as_reader()).unwrap();
-    return json;
+pub fn parse_json(mut req: ureq::http::Response<Body>) -> Option<Value> {
+    let body = req.body_mut().as_reader();
+    if let Ok(json) = serde_json::from_reader(body) {
+        return json;
+    }
+    return None;
 }
 
 pub fn parse_json_str(json_str: &str) -> Value {
