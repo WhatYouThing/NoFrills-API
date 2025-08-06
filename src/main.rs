@@ -55,7 +55,7 @@ async fn get_item_pricing(req: HttpRequest) -> impl Responder {
         CONTENT_TYPE,
         HeaderValue::from_static(APPLICATION_JSON.essence_str()),
     );
-    tracking::add_pricing_count().await;
+    tracking::add_count("pricing").await;
     return res;
 }
 
@@ -70,7 +70,21 @@ async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
         CONTENT_TYPE,
         HeaderValue::from_static(APPLICATION_JSON.essence_str()),
     );
-    tracking::add_pricing_count().await;
+    tracking::add_count("pricing").await;
+    return res;
+}
+
+#[get("/v1/misc/get-api-usage/")]
+async fn get_api_usage(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-api-usage", req).await;
+    if limiter::is_limited(&key, 1000, 1).await {
+        return Response::new(StatusCode::TOO_MANY_REQUESTS);
+    }
+    let mut res = Response::new(StatusCode::OK).set_body(tracking::get_usage_json().await);
+    res.headers_mut().append(
+        CONTENT_TYPE,
+        HeaderValue::from_static(APPLICATION_JSON.essence_str()),
+    );
     return res;
 }
 
@@ -87,6 +101,7 @@ async fn main() -> std::io::Result<()> {
             ))
             .service(get_item_pricing_v2)
             .service(get_item_pricing)
+            .service(get_api_usage)
     })
     .bind(("0.0.0.0", get_port()))?
     .run()

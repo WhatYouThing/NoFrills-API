@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ops::Add, sync::LazyLock, time::Duration};
 
+use actix_web::body::BoxBody;
+use serde_json::json;
 use tokio::{
     sync::{Mutex, MutexGuard},
     task,
@@ -12,23 +14,28 @@ async fn get() -> MutexGuard<'static, HashMap<String, i64>> {
     return USERS.lock().await;
 }
 
-pub async fn get_pricing_count() -> i64 {
-    let key = String::from("get-item-pricing");
+pub async fn get_usage_json() -> BoxBody {
     let map = get().await;
-    if map.contains_key(&key) {
-        return *map.get(&key).unwrap();
+    let json = json!({
+        "pricing": get_count(&map, "pricing").await
+    });
+    return BoxBody::new(json.to_string());
+}
+
+pub async fn get_count(map: &MutexGuard<'static, HashMap<String, i64>>, key: &str) -> i64 {
+    if map.contains_key(key) {
+        return *map.get(key).unwrap();
     }
     return 0;
 }
 
-pub async fn add_pricing_count() {
-    let key = String::from("get-item-pricing");
+pub async fn add_count(key: &str) {
     let mut map = get().await;
-    if !map.contains_key(&key) {
-        map.insert(key, 1);
+    if !map.contains_key(key) {
+        map.insert(key.to_owned(), 1);
     } else {
-        let value = map.get(&key).unwrap().add(1);
-        &map.insert(key, value);
+        let value = map.get(key).unwrap().add(1);
+        &map.insert(key.to_owned(), value);
     }
 }
 
