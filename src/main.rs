@@ -1,5 +1,6 @@
 mod limiter;
 mod pricing;
+mod tracking;
 mod util;
 
 use actix_web::{
@@ -11,12 +12,11 @@ use actix_web::{
         StatusCode,
         header::{CONTENT_TYPE, HeaderValue},
     },
+    middleware,
     mime::APPLICATION_JSON,
 };
-use dotenvy::dotenv;
 use serde_json::json;
-use std::{env, time::Duration};
-use tokio::{task, time::sleep};
+use std::env;
 
 fn get_port() -> u16 {
     if let Ok(port_secret) = env::var("NF_API_PORT") {
@@ -47,7 +47,7 @@ async fn get_item_pricing(req: HttpRequest) -> impl Responder {
     let json = json!({
         "auction": pricing::get_pricing(&map, "auction").to_string(),
         "bazaar": bazaar_sorted.to_string(),
-        "attribute": pricing::get_pricing(&map, "attribute").to_string(),
+        "attribute": json!({}).to_string(),
         "npc": pricing::get_pricing(&map, "npc").to_string()
     });
     let mut res = Response::new(StatusCode::OK).set_body(BoxBody::new(json.to_string()));
@@ -55,6 +55,7 @@ async fn get_item_pricing(req: HttpRequest) -> impl Responder {
         CONTENT_TYPE,
         HeaderValue::from_static(APPLICATION_JSON.essence_str()),
     );
+    tracking::add_pricing_count().await;
     return res;
 }
 
@@ -69,38 +70,21 @@ async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
         CONTENT_TYPE,
         HeaderValue::from_static(APPLICATION_JSON.essence_str()),
     );
+    tracking::add_pricing_count().await;
     return res;
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let _ = dotenv().unwrap();
-    task::spawn(async {
-        loop {
-            pricing::refresh_auction_house().await;
-            sleep(Duration::from_millis(240000)).await;
-        }
-    });
-    task::spawn(async {
-        loop {
-            pricing::refresh_bazaar().await;
-            sleep(Duration::from_millis(120000)).await;
-        }
-    });
-    task::spawn(async {
-        loop {
-            pricing::refresh_npc().await;
-            sleep(Duration::from_millis(1800000)).await;
-        }
-    });
-    task::spawn(async {
-        loop {
-            limiter::clear_expired().await;
-            sleep(Duration::from_millis(60000)).await;
-        }
-    });
+    util::load_env_file();
+    pricing::init();
+    limiter::init();
+    tracking::init();
     HttpServer::new(|| {
         App::new()
+            .wrap(middleware::NormalizePath::new(
+                middleware::TrailingSlash::Always,
+            ))
             .service(get_item_pricing_v2)
             .service(get_item_pricing)
     })

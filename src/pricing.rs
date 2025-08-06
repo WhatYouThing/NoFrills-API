@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use std::sync::LazyLock;
 
 use actix_web::body::BoxBody;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::time::sleep;
+use tokio::{sync::{Mutex, MutexGuard}, task};
 
 use crate::util;
 
@@ -30,7 +31,6 @@ pub async fn get_pricing_json() -> BoxBody {
     let json = json!({
         "auction": get_pricing(&map, "auction"),
         "bazaar": get_pricing(&map, "bazaar"),
-        "attribute": get_pricing(&map, "attribute"),
         "npc": get_pricing(&map, "npc")
     });
     return BoxBody::new(json.to_string());
@@ -65,7 +65,6 @@ pub async fn fetch_auctions_list() -> Vec<Value> {
 pub async fn refresh_auction_house() {
     let auctions = fetch_auctions_list().await;
     let mut auction_prices = json!({});
-    let mut attribute_prices = json!({}); // soon to be scrapped
     for auction in &auctions {
         if auction["bin"].as_bool().unwrap() {
             let bytes = auction["item_bytes"].as_str().unwrap();
@@ -101,41 +100,11 @@ pub async fn refresh_auction_house() {
                 } else {
                     price
                 });
-                if let Some(attributes) = extra.get_compound("attributes") {
-                    let mut list = Vec::new();
-                    let tags = &attributes.child_tags;
-                    for attribute in tags {
-                        list.push(format!(
-                            "{}{}",
-                            attribute.0,
-                            attribute.1.extract_int().unwrap()
-                        ));
-                    }
-                    if tags.len() == 2 {
-                        list.push(format!(
-                            "{} {}",
-                            tags.get(0).unwrap().0,
-                            tags.get(1).unwrap().0
-                        ));
-                    }
-                    for id in list {
-                        if !attribute_prices[&id].is_object() {
-                            attribute_prices[&id] = json!({});
-                        }
-                        let attribute_current = attribute_prices[&id][&item_id].as_f64();
-                        attribute_prices[&id][&item_id] = json!(if attribute_current.is_some() {
-                            attribute_current.unwrap().min(price)
-                        } else {
-                            price
-                        });
-                    }
-                }
             }
         }
     }
     if !auctions.is_empty() {
         update_pricing("auction", auction_prices).await;
-        update_pricing("attribute", attribute_prices).await;
     }
 }
 
@@ -201,4 +170,29 @@ pub async fn refresh_npc() {
             update_pricing("npc", npc_prices).await;
         }
     }
+}
+
+
+pub fn init() {
+    task::spawn(async {
+        let duration = Duration::from_millis(240000);
+        loop {
+            refresh_auction_house().await;
+            sleep(duration).await;
+        }
+    });
+    task::spawn(async {
+        let duration = Duration::from_millis(120000);
+        loop {
+            refresh_bazaar().await;
+            sleep(duration).await;
+        }
+    });
+    task::spawn(async {
+    let duration = Duration::from_millis(1800000);
+        loop {
+            refresh_npc().await;
+            sleep(duration).await;
+        }
+    });
 }

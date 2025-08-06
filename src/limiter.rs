@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use actix_web::HttpRequest;
 use tokio::sync::{Mutex, MutexGuard};
-use tokio::time::Instant;
+use tokio::task;
+use tokio::time::{Instant, sleep};
 
 static RATE_LIMITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -73,4 +74,14 @@ pub async fn clear_expired() {
             map.remove(key.as_str()).unwrap();
         }
     }
+}
+
+pub fn init() {
+    task::spawn(async {
+        let duration = Duration::from_millis(300000);
+        loop {
+            clear_expired().await;
+            sleep(duration).await;
+        }
+    });
 }

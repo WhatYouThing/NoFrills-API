@@ -2,6 +2,7 @@ use std::{env, io::Read};
 
 use base64::{Engine, engine::general_purpose};
 use crab_nbt::NbtCompound;
+use dotenvy::dotenv;
 use flate2::bufread::GzDecoder;
 use serde_json::Value;
 use ureq::{Agent, Body, config::AutoHeaderValue};
@@ -18,6 +19,10 @@ pub async fn make_request(url: &str) -> Result<ureq::http::Response<ureq::Body>,
         .get(format!("https://api.hypixel.net/{}", url))
         .header("API-Key", env::var("HYPIXEL_API_KEY").unwrap())
         .call();
+}
+
+pub fn load_env_file() {
+    let _ = dotenv().unwrap();
 }
 
 pub fn parse_json(mut req: ureq::http::Response<Body>) -> Option<Value> {
