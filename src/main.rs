@@ -16,13 +16,23 @@ use actix_web::{
     mime::APPLICATION_JSON,
 };
 use serde_json::json;
-use std::env;
+use std::{env, time::Duration};
+use tokio::{task, time::sleep};
 
 fn get_port() -> u16 {
     if let Ok(port_secret) = env::var("NF_API_PORT") {
         return port_secret.parse().unwrap();
     }
     return 4269;
+}
+
+fn response_ok(body: BoxBody) -> Response<BoxBody> {
+    let mut res = Response::new(StatusCode::OK).set_body(body);
+    res.headers_mut().append(
+        CONTENT_TYPE,
+        HeaderValue::from_static(APPLICATION_JSON.essence_str()),
+    );
+    return res;
 }
 
 #[get("/v1/economy/get-item-pricing/")] // compatibility with outdated NoFrills builds
@@ -50,13 +60,8 @@ async fn get_item_pricing(req: HttpRequest) -> impl Responder {
         "attribute": json!({}).to_string(),
         "npc": pricing::get_pricing(&map, "npc").to_string()
     });
-    let mut res = Response::new(StatusCode::OK).set_body(BoxBody::new(json.to_string()));
-    res.headers_mut().append(
-        CONTENT_TYPE,
-        HeaderValue::from_static(APPLICATION_JSON.essence_str()),
-    );
-    tracking::add_count("pricing").await;
-    return res;
+    tracking::add_usage("pricing").await;
+    return response_ok(BoxBody::new(json.to_string()));
 }
 
 #[get("/v2/economy/get-item-pricing/")]
@@ -65,13 +70,8 @@ async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
     if limiter::is_limited(&key, 30000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    let mut res = Response::new(StatusCode::OK).set_body(pricing::get_pricing_json().await);
-    res.headers_mut().append(
-        CONTENT_TYPE,
-        HeaderValue::from_static(APPLICATION_JSON.essence_str()),
-    );
-    tracking::add_count("pricing").await;
-    return res;
+    tracking::add_usage("pricing").await;
+    return response_ok(pricing::get_pricing_json().await);
 }
 
 #[get("/v1/misc/get-api-usage/")]
@@ -80,20 +80,37 @@ async fn get_api_usage(req: HttpRequest) -> impl Responder {
     if limiter::is_limited(&key, 1000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    let mut res = Response::new(StatusCode::OK).set_body(tracking::get_usage_json().await);
-    res.headers_mut().append(
-        CONTENT_TYPE,
-        HeaderValue::from_static(APPLICATION_JSON.essence_str()),
-    );
-    return res;
+    return response_ok(tracking::get_usage_json().await);
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     util::load_env_file();
-    pricing::init();
-    limiter::init();
-    tracking::init();
+
+    task::spawn(async {
+        let duration = Duration::from_millis(240000);
+        loop {
+            pricing::refresh_auction_house().await;
+            sleep(duration).await;
+        }
+    });
+
+    task::spawn(async {
+        let duration = Duration::from_millis(120000);
+        loop {
+            pricing::refresh_bazaar().await;
+            sleep(duration).await;
+        }
+    });
+
+    task::spawn(async {
+        let duration = Duration::from_millis(1800000);
+        loop {
+            pricing::refresh_npc().await;
+            sleep(duration).await;
+        }
+    });
+
     HttpServer::new(|| {
         App::new()
             .wrap(middleware::NormalizePath::new(

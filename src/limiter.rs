@@ -1,21 +1,40 @@
 use std::collections::HashMap;
 use std::env;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use actix_web::HttpRequest;
 use tokio::sync::{Mutex, MutexGuard};
-use tokio::task;
-use tokio::time::{Instant, sleep};
 
-static RATE_LIMITS: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
+use crate::util;
+
+static RATE_LIMITS: LazyLock<Mutex<HashMap<String, Vec<Limit>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-async fn get() -> MutexGuard<'static, HashMap<String, Vec<Instant>>> {
-    return RATE_LIMITS.lock().await;
+pub struct Limit {
+    time: u128,
+    ttl: u128,
 }
 
-fn get_ip(request: HttpRequest) -> String {
+impl Limit {
+    pub fn new(ttl: u128) -> Self {
+        return Limit {
+            time: util::get_timestamp(),
+            ttl: ttl,
+        };
+    }
+}
+
+pub async fn get() -> MutexGuard<'static, HashMap<String, Vec<Limit>>> {
+    let mut map = RATE_LIMITS.lock().await;
+    let timestamp = util::get_timestamp();
+    map.retain(|_key, value| {
+        value.retain(|limit| timestamp - limit.time < limit.ttl);
+        return value.len() > 0;
+    });
+    return map;
+}
+
+pub fn get_ip(request: HttpRequest) -> String {
     if env::var("NF_API_CLOUDFLARE").is_ok_and(|var| var.eq("true")) {
         return request
             .headers()
@@ -44,44 +63,15 @@ pub async fn new_key(endpoint: &str, request: HttpRequest) -> String {
 }
 
 // adding authentication to your API to stop "freeloaders" while freeloading the NEU api yourself is some high tier projection
-pub async fn is_limited(key: &String, ttl: u64, limit: usize) -> bool {
-    let delay = Duration::from_millis(ttl);
+pub async fn is_limited(key: &String, ttl: u128, limit: usize) -> bool {
     let mut map = get().await;
-    let now = Instant::now();
-    let zero_duration = Duration::from_millis(0);
     if map.contains_key(key) {
-        let list = map.get_mut(key).unwrap();
-        list.retain(|instant| now.duration_since(*instant) == zero_duration);
-        if list.len() >= limit {
+        if map.get(key).unwrap().len() >= limit {
             return true;
         }
     } else {
         map.insert(key.to_owned(), Vec::new());
     }
-    let instant = Instant::now().checked_add(delay).unwrap();
-    map.get_mut(key).unwrap().push(instant);
+    map.get_mut(key).unwrap().push(Limit::new(ttl));
     return false;
-}
-
-pub async fn clear_expired() {
-    let mut map = get().await;
-    let now = Instant::now();
-    let zero_duration = Duration::from_millis(0);
-    for key in map.to_owned().keys() {
-        let list = map.get_mut(key).unwrap();
-        list.retain(|instant| now.duration_since(*instant) == zero_duration);
-        if list.len() == 0 {
-            map.remove(key.as_str()).unwrap();
-        }
-    }
-}
-
-pub fn init() {
-    task::spawn(async {
-        let duration = Duration::from_millis(300000);
-        loop {
-            clear_expired().await;
-            sleep(duration).await;
-        }
-    });
 }

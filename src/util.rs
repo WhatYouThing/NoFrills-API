@@ -1,4 +1,8 @@
-use std::{env, io::Read};
+use std::{
+    env,
+    io::Read,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use base64::{Engine, engine::general_purpose};
 use crab_nbt::NbtCompound;
@@ -19,6 +23,13 @@ pub async fn make_request(url: &str) -> Result<ureq::http::Response<ureq::Body>,
         .get(format!("https://api.hypixel.net/{}", url))
         .header("API-Key", env::var("HYPIXEL_API_KEY").unwrap())
         .call();
+}
+
+pub fn get_timestamp() -> u128 {
+    return SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
 }
 
 pub fn load_env_file() {

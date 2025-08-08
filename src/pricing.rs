@@ -1,10 +1,9 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use actix_web::body::BoxBody;
 use serde_json::{Value, json};
-use tokio::time::sleep;
-use tokio::{sync::{Mutex, MutexGuard}, task};
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::util;
 
@@ -170,29 +169,4 @@ pub async fn refresh_npc() {
             update_pricing("npc", npc_prices).await;
         }
     }
-}
-
-
-pub fn init() {
-    task::spawn(async {
-        let duration = Duration::from_millis(240000);
-        loop {
-            refresh_auction_house().await;
-            sleep(duration).await;
-        }
-    });
-    task::spawn(async {
-        let duration = Duration::from_millis(120000);
-        loop {
-            refresh_bazaar().await;
-            sleep(duration).await;
-        }
-    });
-    task::spawn(async {
-    let duration = Duration::from_millis(1800000);
-        loop {
-            refresh_npc().await;
-            sleep(duration).await;
-        }
-    });
 }
