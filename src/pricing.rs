@@ -70,28 +70,37 @@ pub async fn refresh_auction_house() {
             let nbt = util::parse_item_nbt(bytes).await;
             let tag = nbt.get_compound("tag").unwrap();
             if let Some(extra) = tag.get_compound("ExtraAttributes") {
-                let mut item_id = extra.get_string("id").unwrap().to_owned();
-                if item_id.eq("PET") {
-                    let pet_info = util::parse_json_str(extra.get_string("petInfo").unwrap());
-                    item_id = format!(
-                        "{}_PET_{}",
-                        pet_info["type"].as_str().unwrap(),
-                        pet_info["tier"].as_str().unwrap()
-                    );
-                }
-                if item_id.eq("RUNE") {
-                    let rune_info = extra
-                        .get_compound("runes")
-                        .unwrap()
-                        .child_tags
-                        .first()
-                        .unwrap();
-                    item_id = format!(
-                        "{}_{}_RUNE",
-                        rune_info.0,
-                        rune_info.1.extract_int().unwrap()
-                    );
-                }
+                let id = extra.get_string("id").unwrap();
+                let item_id = match id.as_str() {
+                    "PET" => {
+                        let pet_info = util::parse_json_str(extra.get_string("petInfo").unwrap());
+                        format!(
+                            "{}_PET_{}",
+                            pet_info["type"].as_str().unwrap(),
+                            pet_info["tier"].as_str().unwrap()
+                        )
+                    }
+                    "RUNE" | "UNIQUE_RUNE" => {
+                        if let Some(rune_info) = extra.get_compound("runes") {
+                            let tags = rune_info.child_tags.first().unwrap();
+                            format!("{}_{}_RUNE", tags.0, tags.1.extract_int().unwrap())
+                        } else {
+                            "EMPTY_RUNE".to_owned()
+                        }
+                    }
+                    "POTION" => {
+                        if let Some(potion_id) = extra.get_string("potion") {
+                            format!(
+                                "{}_{}_POTION",
+                                potion_id.to_uppercase(),
+                                extra.get_int("potion_level").unwrap()
+                            )
+                        } else {
+                            "UNKNOWN_POTION".to_owned()
+                        }
+                    }
+                    _ => id.to_owned(),
+                };
                 let price = auction["starting_bid"].as_f64().unwrap();
                 let current_price = auction_prices[&item_id].as_f64();
                 auction_prices[&item_id] = json!(if current_price.is_some() {
