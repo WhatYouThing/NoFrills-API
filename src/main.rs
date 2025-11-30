@@ -154,7 +154,7 @@ async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
             let message = json!({
                 "embeds": [
                     {
-                        "title": format!("Beta Buikd for Minecraft {}", version),
+                        "title": format!("Beta Build for Minecraft {}", version),
                         "description": format!("[**Click here to download**]({})\n\nCommit: [`{}`]({})\nChanges:\n```{}```",
                             format!("https://whatyouth.ing/beta/{}", file_name),
                             hash_short,
