@@ -138,8 +138,14 @@ async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
         let hash = body["hash"].as_str().unwrap_or("");
         let version = body["version"].as_str().unwrap_or("");
         let message = body["message"].as_str().unwrap_or("");
+        let branch = body["branch"].as_str().unwrap_or("");
         let bytes = body["bytes"].as_array();
-        if hash.is_empty() || version.is_empty() || message.is_empty() || bytes.is_none() {
+        if hash.is_empty()
+            || version.is_empty()
+            || message.is_empty()
+            || branch.is_empty()
+            || bytes.is_none()
+        {
             return Response::new(StatusCode::BAD_REQUEST);
         }
         let bytes_raw: Vec<u8> = bytes
@@ -155,8 +161,9 @@ async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
                 "embeds": [
                     {
                         "title": format!("Beta Build for Minecraft {}", version),
-                        "description": format!("[**Click here to download**]({})\n\nCommit: [`{}`]({})\nChanges:\n```{}```",
+                        "description": format!("[**Click here to download**]({})\n\nBranch: `{}`\nCommit: [`{}`]({})\n\nChanges\n```{}```",
                             format!("https://whatyouth.ing/beta/{}", file_name),
+                            branch,
                             hash_short,
                             format!("https://github.com/WhatYouThing/NoFrills/commit/{}", hash),
                             message
