@@ -1,3 +1,4 @@
+mod election;
 mod limiter;
 mod pricing;
 mod tracking;
@@ -108,6 +109,16 @@ async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
     return response_ok(pricing::get_pricing_json().await);
 }
 
+#[get("/v1/election/get-active-perks/")]
+async fn get_active_perks(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-active-perks", req).await;
+    if limiter::is_limited(&key, 30000, 1).await {
+        return Response::new(StatusCode::TOO_MANY_REQUESTS);
+    }
+    tracking::add_usage("perks").await;
+    return response_ok(election::get_perks_json().await);
+}
+
 #[get("/v1/misc/get-api-usage/")]
 async fn get_api_usage(req: HttpRequest) -> impl Responder {
     let key = limiter::new_key("get-api-usage", req).await;
@@ -208,6 +219,14 @@ async fn main() -> std::io::Result<()> {
     });
 
     task::spawn(async {
+        let duration = Duration::from_millis(180000);
+        loop {
+            election::refresh_perks().await;
+            sleep(duration).await;
+        }
+    });
+
+    task::spawn(async {
         let duration = Duration::from_millis(3600000);
         loop {
             if let Ok(path) = env::var("NF_API_BETA_PATH") {
@@ -241,6 +260,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(PayloadConfig::new(10000000))
             .service(get_item_pricing_v2)
             .service(get_item_pricing)
+            .service(get_active_perks)
             .service(get_api_usage)
             .service(post_beta_build)
     })
