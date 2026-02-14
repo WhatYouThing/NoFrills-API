@@ -38,12 +38,9 @@ pub async fn refresh_perks() {
             for perk in json["mayor"]["perks"].as_array().unwrap() {
                 set.insert(perk["name"].as_str().unwrap().to_string());
             }
-            set.insert(
-                json["mayor"]["minister"]["perk"]["name"]
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
-            );
+            if let Some(minister_perk) = json["mayor"]["minister"]["perk"]["name"].as_str() {
+                set.insert(minister_perk.to_string());
+            }
         }
     }
 }
