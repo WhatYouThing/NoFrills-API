@@ -153,29 +153,22 @@ pub async fn refresh_bazaar() {
     }
 }
 
-pub async fn refresh_npc() {
-    let req = util::make_request("v2/resources/skyblock/items").await;
-    if req.is_err() {
-        println!("Panicked while refreshing NPC data:\n{}", req.unwrap_err());
-    } else {
-        let mut npc_prices = json!({});
-        if let Some(json) = util::parse_json(req.unwrap()) {
-            let items = json["items"].as_array().unwrap();
-            for item in items {
-                let id = item["id"].as_str().unwrap();
-                let coins_price = item["npc_sell_price"].as_f64();
-                let motes_price = item["motes_sell_price"].as_f64();
-                if coins_price.is_some() || motes_price.is_some() {
-                    npc_prices[id] = json!({});
-                    if coins_price.is_some() {
-                        npc_prices[id]["coin"] = json!(coins_price.unwrap());
-                    }
-                    if motes_price.is_some() {
-                        npc_prices[id]["mote"] = json!(motes_price.unwrap());
-                    }
-                }
+pub async fn refresh_npc(json: &Value) {
+    let mut npc_prices = json!({});
+    let items = json["items"].as_array().unwrap();
+    for item in items {
+        let id = item["id"].as_str().unwrap();
+        let coins_price = item["npc_sell_price"].as_f64();
+        let motes_price = item["motes_sell_price"].as_f64();
+        if coins_price.is_some() || motes_price.is_some() {
+            npc_prices[id] = json!({});
+            if coins_price.is_some() {
+                npc_prices[id]["coin"] = json!(coins_price.unwrap());
             }
-            update_pricing("npc", npc_prices).await;
+            if motes_price.is_some() {
+                npc_prices[id]["mote"] = json!(motes_price.unwrap());
+            }
         }
     }
+    update_pricing("npc", npc_prices).await;
 }

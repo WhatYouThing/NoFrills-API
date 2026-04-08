@@ -1,4 +1,5 @@
 mod election;
+mod items;
 mod limiter;
 mod pricing;
 mod tracking;
@@ -70,35 +71,6 @@ async fn http_post(
         .send(body)
 }
 
-#[get("/v1/economy/get-item-pricing/")] // compatibility with outdated NoFrills builds
-async fn get_item_pricing(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-item-pricing", req).await;
-    if limiter::is_limited(&key, 30000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    let map = pricing::get().await;
-    let bazaar_prices = pricing::get_pricing(&map, "bazaar");
-    let mut bazaar_sorted = json!({});
-    for (id, prices) in bazaar_prices.as_object().unwrap().iter() {
-        let mut price_array = vec![0.0, 0.0];
-        if prices["buy"].is_f64() {
-            *price_array.get_mut(0).unwrap() = prices["buy"].as_f64().unwrap();
-        }
-        if prices["sell"].is_f64() {
-            *price_array.get_mut(1).unwrap() = prices["sell"].as_f64().unwrap();
-        }
-        bazaar_sorted[id] = json!(price_array);
-    }
-    let json = json!({
-        "auction": pricing::get_pricing(&map, "auction").to_string(),
-        "bazaar": bazaar_sorted.to_string(),
-        "attribute": json!({}).to_string(),
-        "npc": pricing::get_pricing(&map, "npc").to_string()
-    });
-    tracking::add_usage("pricing").await;
-    return response_ok(BoxBody::new(json.to_string()));
-}
-
 #[get("/v2/economy/get-item-pricing/")]
 async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
     let key = limiter::new_key("get-item-pricing", req).await;
@@ -119,10 +91,19 @@ async fn get_active_perks(req: HttpRequest) -> impl Responder {
     return response_ok(election::get_perks_json().await);
 }
 
+#[get("/v1/misc/get-item-attributes/")]
+async fn get_item_attributes(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-item-attributes", req).await;
+    if limiter::is_limited(&key, 30000, 1).await {
+        return Response::new(StatusCode::TOO_MANY_REQUESTS);
+    }
+    return response_ok(items::get_attributes_json().await);
+}
+
 #[get("/v1/misc/get-api-usage/")]
 async fn get_api_usage(req: HttpRequest) -> impl Responder {
     let key = limiter::new_key("get-api-usage", req).await;
-    if limiter::is_limited(&key, 1000, 1).await {
+    if limiter::is_limited(&key, 250, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
     return response_ok(tracking::get_usage_json().await);
@@ -213,7 +194,15 @@ async fn main() -> std::io::Result<()> {
     task::spawn(async {
         let duration = Duration::from_millis(1800000);
         loop {
-            pricing::refresh_npc().await;
+            let req = util::make_request("v2/resources/skyblock/items").await;
+            if req.is_err() {
+                println!("Panicked while refreshing NPC data:\n{}", req.unwrap_err());
+            } else {
+                if let Some(json) = util::parse_json(req.unwrap()) {
+                    pricing::refresh_npc(&json).await;
+                    items::refresh_items(&json).await;
+                }
+            }
             sleep(duration).await;
         }
     });
@@ -259,8 +248,8 @@ async fn main() -> std::io::Result<()> {
             ))
             .app_data(PayloadConfig::new(10000000))
             .service(get_item_pricing_v2)
-            .service(get_item_pricing)
             .service(get_active_perks)
+            .service(get_item_attributes)
             .service(get_api_usage)
             .service(post_beta_build)
     })

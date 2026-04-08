@@ -54,12 +54,12 @@ pub fn get_ip(request: HttpRequest) -> String {
 }
 
 pub async fn new_key(endpoint: &str, request: HttpRequest) -> String {
-    let key = get_ip(request);
+    let key = format!("{}+{}", endpoint, get_ip(request));
     let mut map = get().await;
     if !map.contains_key(&key) {
         map.insert(key.to_owned(), Vec::new());
     }
-    return format!("{}+{}", endpoint, key);
+    return key;
 }
 
 // adding authentication to your API to stop "freeloaders" while freeloading the NEU api yourself is some high tier projection
