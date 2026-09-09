@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use actix_web::body::BoxBody;
+use futures::future::join_all;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -36,27 +37,36 @@ pub async fn get_pricing_json() -> BoxBody {
 }
 
 pub async fn fetch_auctions_list() -> Vec<Value> {
-    let mut page = 0;
-    let mut max_pages = 50;
     let mut auctions = Vec::new();
-    while page <= max_pages {
-        let url = format!("v2/skyblock/auctions?page={}", page);
-        let req = util::make_request(url.as_str()).await;
-        if req.is_err() {
-            println!(
-                "Panicked while refreshing Auction House data, page {}/{}:\n{}",
-                page,
-                max_pages,
-                req.unwrap_err()
-            );
-            return Vec::new();
+    if let Ok(body) = util::make_request("v2/skyblock/auctions").await {
+        if let Some(json) = util::parse_json(body) {
+            let max_pages = json["totalPages"].as_i64().unwrap_or(0);
+            if max_pages == 0 {
+                return Vec::new();
+            }
+            let range = 0..(max_pages - 1);
+            let callbacks: Vec<_> = range
+                .into_iter()
+                .map(async |page| {
+                    let url = format!("v2/skyblock/auctions?page={}", page);
+                    util::make_request(url.as_str()).await
+                })
+                .collect();
+            let responses = join_all(callbacks).await;
+            for req in responses {
+                if req.is_err() {
+                    println!(
+                        "Panicked while refreshing Auction House page:\n{}",
+                        req.unwrap_err()
+                    );
+                    continue;
+                }
+                if let Some(json) = util::parse_json(req.unwrap()) {
+                    let auction_list = json["auctions"].as_array().unwrap();
+                    auctions.append(&mut auction_list.to_owned());
+                }
+            }
         }
-        if let Some(json) = util::parse_json(req.unwrap()) {
-            let auction_list = json["auctions"].as_array().unwrap();
-            auctions.append(&mut auction_list.to_owned());
-            max_pages = json["totalPages"].as_i64().unwrap() - 1;
-        }
-        page += 1;
     }
     return auctions;
 }
@@ -70,36 +80,48 @@ pub async fn refresh_auction_house() {
             let nbt = util::parse_item_nbt(bytes).await;
             let tag = nbt.get_compound("tag").unwrap();
             if let Some(extra) = tag.get_compound("ExtraAttributes") {
-                let id = extra.get_string("id").unwrap();
-                let item_id = match id.as_str() {
-                    "PET" => {
-                        let pet_info = util::parse_json_str(extra.get_string("petInfo").unwrap());
-                        format!(
-                            "{}_PET_{}",
-                            pet_info["type"].as_str().unwrap(),
-                            pet_info["tier"].as_str().unwrap()
-                        )
-                    }
-                    "RUNE" | "UNIQUE_RUNE" => {
-                        if let Some(rune_info) = extra.get_compound("runes") {
-                            let tags = rune_info.child_tags.first().unwrap();
-                            format!("{}_{}_RUNE", tags.0, tags.1.extract_int().unwrap())
-                        } else {
-                            "EMPTY_RUNE".to_owned()
-                        }
-                    }
-                    "POTION" => {
-                        if let Some(potion_id) = extra.get_string("potion") {
+                let id = extra.get_string("id").map_or("", |v| v);
+                if id.is_empty() {
+                    continue;
+                }
+                let item_id = if extra.get_int("baseStatBoostPercentage").unwrap_or(0) == 50 {
+                    format!(
+                        "{}_MAX_BOOST_TIER_{}",
+                        id.to_owned(),
+                        extra.get_int("item_tier").unwrap_or(0)
+                    )
+                } else {
+                    match id {
+                        "PET" => {
+                            let pet_info =
+                                util::parse_json_str(extra.get_string("petInfo").unwrap()).unwrap();
                             format!(
-                                "{}_{}_POTION",
-                                potion_id.to_uppercase(),
-                                extra.get_int("potion_level").unwrap()
+                                "{}_PET_{}",
+                                pet_info["type"].as_str().unwrap(),
+                                pet_info["tier"].as_str().unwrap()
                             )
-                        } else {
-                            "UNKNOWN_POTION".to_owned()
                         }
+                        "RUNE" | "UNIQUE_RUNE" => {
+                            if let Some(rune_info) = extra.get_compound("runes") {
+                                let tags = rune_info.child_tags.first().unwrap();
+                                format!("{}_{}_RUNE", tags.0, tags.1.extract_int().unwrap())
+                            } else {
+                                "EMPTY_RUNE".to_owned()
+                            }
+                        }
+                        "POTION" => {
+                            if let Some(potion_id) = extra.get_string("potion") {
+                                format!(
+                                    "{}_{}_POTION",
+                                    potion_id.to_uppercase(),
+                                    extra.get_int("potion_level").unwrap()
+                                )
+                            } else {
+                                "UNKNOWN_POTION".to_owned()
+                            }
+                        }
+                        _ => id.to_owned(),
                     }
-                    _ => id.to_owned(),
                 };
                 let price = auction["starting_bid"].as_f64().unwrap();
                 let current_price = auction_prices[&item_id].as_f64();

@@ -11,7 +11,7 @@ use flate2::bufread::GzDecoder;
 use serde_json::Value;
 use ureq::{Agent, Body, config::AutoHeaderValue};
 
-fn get_http_agent() -> Agent {
+pub fn get_http_agent() -> Agent {
     return Agent::config_builder()
         .accept_encoding(AutoHeaderValue::None)
         .build()
@@ -44,9 +44,11 @@ pub fn parse_json(mut req: ureq::http::Response<Body>) -> Option<Value> {
     return None;
 }
 
-pub fn parse_json_str(json_str: &str) -> Value {
-    let json: Value = serde_json::from_str(json_str).unwrap();
-    return json;
+pub fn parse_json_str(json_str: &str) -> Option<Value> {
+    if let Ok(json) = serde_json::from_str(json_str) {
+        return json;
+    }
+    return None;
 }
 
 pub fn decode_base64(b64: &str) -> Vec<u8> {

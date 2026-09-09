@@ -1,8 +1,9 @@
+mod betas;
 mod election;
 mod items;
 mod limiter;
 mod pricing;
-mod tracking;
+mod streams;
 mod util;
 
 use actix_web::{
@@ -12,44 +13,26 @@ use actix_web::{
     get,
     http::{
         StatusCode,
-        header::{CONTENT_TYPE, HeaderName, HeaderValue},
+        header::{CONTENT_TYPE, HeaderValue},
     },
     middleware,
     mime::APPLICATION_JSON,
     post,
     web::{Bytes, PayloadConfig},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
-    env, fs,
-    sync::LazyLock,
-    time::{Duration, SystemTime},
+    env::{self, current_dir},
+    fs,
+    time::Duration,
 };
 use tokio::{task, time::sleep};
-use ureq::{Agent, AsSendBody};
-
-static BETA_AUTH: LazyLock<String> =
-    LazyLock::new(|| env::var("NF_API_BETA_AUTH").unwrap_or(String::new()));
 
 fn get_port() -> u16 {
     if let Ok(port_secret) = env::var("NF_API_PORT") {
         return port_secret.parse().unwrap();
     }
     return 4269;
-}
-
-fn get_header(req: &HttpRequest, name: &'static str) -> String {
-    let headers = req.headers();
-    let key = HeaderName::from_static(name);
-    if headers.contains_key(&key) {
-        return headers
-            .get(&key)
-            .unwrap()
-            .to_str()
-            .unwrap_or("")
-            .to_string();
-    }
-    return "".to_string();
 }
 
 fn response_ok(body: BoxBody) -> Response<BoxBody> {
@@ -61,114 +44,106 @@ fn response_ok(body: BoxBody) -> Response<BoxBody> {
     return res;
 }
 
-async fn http_post(
-    url: String,
-    body: impl AsSendBody,
-) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
-    Agent::new_with_defaults()
-        .post(url)
-        .header("Content-Type", "application/json")
-        .send(body)
+async fn authenticate(req: &HttpRequest) -> bool {
+    let headers = req.headers();
+    let mod_ver = headers
+        .get("X-NoFrills-ModVer")
+        .map(|h| h.to_str().unwrap_or(""));
+    let game_ver = headers
+        .get("X-NoFrills-GameVer")
+        .map(|h| h.to_str().unwrap_or(""));
+    if mod_ver.is_none() || game_ver.is_none() {
+        return false;
+    }
+    let path = current_dir().unwrap().join("versions.json");
+    if !fs::exists(&path).unwrap_or(false) {
+        let _ = fs::write(&path, json!({"mod": [],"mc": []}).to_string()).unwrap();
+    }
+    let file = fs::read_to_string(&path).unwrap();
+    if let Some(json) = util::parse_json_str(&file) {
+        let mod_versions = json["mod"].as_array().unwrap();
+        let mc_versions = json["mc"].as_array().unwrap();
+        return mod_versions.contains(&json!(mod_ver.unwrap()))
+            && mc_versions.contains(&json!(game_ver.unwrap()));
+    }
+    return false;
 }
 
 #[get("/v2/economy/get-item-pricing/")]
 async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-item-pricing", req).await;
-    if limiter::is_limited(&key, 30000, 1).await {
+    let key = limiter::new_key("get-item-pricing", &req).await;
+    if limiter::is_limited(&key, 10000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    tracking::add_usage("pricing").await;
+    if !authenticate(&req).await {
+        return Response::new(StatusCode::UNAUTHORIZED);
+    }
     return response_ok(pricing::get_pricing_json().await);
 }
 
 #[get("/v1/election/get-active-perks/")]
 async fn get_active_perks(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-active-perks", req).await;
-    if limiter::is_limited(&key, 30000, 1).await {
+    let key = limiter::new_key("get-active-perks", &req).await;
+    if limiter::is_limited(&key, 10000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    tracking::add_usage("perks").await;
+    if !authenticate(&req).await {
+        return Response::new(StatusCode::UNAUTHORIZED);
+    }
     return response_ok(election::get_perks_json().await);
 }
 
-#[get("/v1/misc/get-item-attributes/")]
-async fn get_item_attributes(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-item-attributes", req).await;
-    if limiter::is_limited(&key, 30000, 1).await {
+#[get("/v1/items/get-non-placeable/")]
+async fn get_non_placeable(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-non-placeable", &req).await;
+    if limiter::is_limited(&key, 10000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    return response_ok(items::get_attributes_json().await);
+    if !authenticate(&req).await {
+        return Response::new(StatusCode::UNAUTHORIZED);
+    }
+    return response_ok(items::get_non_placeable_json().await);
 }
 
-#[get("/v1/misc/get-api-usage/")]
-async fn get_api_usage(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-api-usage", req).await;
-    if limiter::is_limited(&key, 250, 1).await {
+#[get("/v1/items/get-museum-data/")]
+async fn get_museum_data(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-museum-data", &req).await;
+    if limiter::is_limited(&key, 10000, 1).await {
         return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    return response_ok(tracking::get_usage_json().await);
+    if !authenticate(&req).await {
+        return Response::new(StatusCode::UNAUTHORIZED);
+    }
+    return response_ok(items::get_museum_data_json().await);
+}
+
+#[get("/v1/items/get-item-textures/")]
+async fn get_item_textures(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-item-textures", &req).await;
+    if limiter::is_limited(&key, 10000, 1).await {
+        return Response::new(StatusCode::TOO_MANY_REQUESTS);
+    }
+    if !authenticate(&req).await {
+        return Response::new(StatusCode::UNAUTHORIZED);
+    }
+    if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("skyblockItemTextures.json")) {
+        return response_ok(BoxBody::new(file));
+    }
+    return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[post("/v1/misc/post-beta-build/")]
 async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
-    let header = get_header(&req, "nf-beta-auth");
-    if !BETA_AUTH.is_empty() && BETA_AUTH.eq(&header) {
-        let path = env::var("NF_API_BETA_PATH");
-        let webhook = env::var("NF_API_BETA_WEBHOOK");
-        if path.is_err() || webhook.is_err() {
-            return Response::internal_server_error();
-        }
-        let data = String::from_utf8(payload.to_vec());
-        if data.is_err() {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let json: Result<Value, serde_json::Error> = serde_json::from_str(&data.unwrap());
-        if json.is_err() {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let body = json.unwrap();
-        let hash = body["hash"].as_str().unwrap_or("");
-        let version = body["version"].as_str().unwrap_or("");
-        let message = body["message"].as_str().unwrap_or("");
-        let branch = body["branch"].as_str().unwrap_or("");
-        let bytes = body["bytes"].as_array();
-        if hash.is_empty()
-            || version.is_empty()
-            || message.is_empty()
-            || branch.is_empty()
-            || bytes.is_none()
-        {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let bytes_raw: Vec<u8> = bytes
-            .unwrap()
-            .iter()
-            .map(|byte| byte.as_u64().unwrap() as u8)
-            .collect(); // converts serde_json values to raw bytes
-        let hash_short = hash.split_at(8).0;
-        let file_name = format!("nofrills-{}-{}.jar", version, hash_short);
-        let write = fs::write(format!("{}/{}", path.unwrap(), file_name), bytes_raw);
-        if write.is_ok() {
-            let message = json!({
-                "embeds": [
-                    {
-                        "title": format!("Beta Build for Minecraft {}", version),
-                        "description": format!("[**Click here to download**]({})\n\nBranch: `{}`\nCommit: [`{}`]({})\n\nChanges\n```{}```",
-                            format!("https://whatyouth.ing/beta/{}", file_name),
-                            branch,
-                            hash_short,
-                            format!("https://github.com/WhatYouThing/NoFrills/commit/{}", hash),
-                            message
-                        ),
-                        "color": 0x5ca0bf
-                    }
-                ]
-            });
-            let _ = http_post(webhook.unwrap(), message.to_string()).await;
-            return Response::ok();
-        }
+    return betas::post(payload, req).await;
+}
+
+#[get("/v1/misc/get-skyblock-streams/")]
+async fn get_skyblock_streams(req: HttpRequest) -> impl Responder {
+    let key = limiter::new_key("get-skyblock-streams", &req).await;
+    if limiter::is_limited(&key, 200, 1).await {
+        return Response::new(StatusCode::TOO_MANY_REQUESTS);
     }
-    return Response::new(StatusCode::UNAUTHORIZED);
+    return response_ok(streams::get_streams_json().await);
 }
 
 #[actix_web::main]
@@ -176,23 +151,20 @@ async fn main() -> std::io::Result<()> {
     util::load_env_file();
 
     task::spawn(async {
-        let duration = Duration::from_millis(240000);
         loop {
             pricing::refresh_auction_house().await;
-            sleep(duration).await;
+            sleep(Duration::from_millis(240000)).await;
         }
     });
 
     task::spawn(async {
-        let duration = Duration::from_millis(120000);
         loop {
             pricing::refresh_bazaar().await;
-            sleep(duration).await;
+            sleep(Duration::from_millis(120000)).await;
         }
     });
 
     task::spawn(async {
-        let duration = Duration::from_millis(1800000);
         loop {
             let req = util::make_request("v2/resources/skyblock/items").await;
             if req.is_err() {
@@ -203,41 +175,28 @@ async fn main() -> std::io::Result<()> {
                     items::refresh_items(&json).await;
                 }
             }
-            sleep(duration).await;
+            sleep(Duration::from_millis(1800000)).await;
         }
     });
 
     task::spawn(async {
-        let duration = Duration::from_millis(180000);
         loop {
             election::refresh_perks().await;
-            sleep(duration).await;
+            sleep(Duration::from_millis(180000)).await;
         }
     });
 
     task::spawn(async {
-        let duration = Duration::from_millis(3600000);
         loop {
-            if let Ok(path) = env::var("NF_API_BETA_PATH") {
-                if let Ok(dir) = fs::read_dir(path) {
-                    for entry in dir {
-                        if !entry.is_ok() {
-                            continue;
-                        }
-                        let file = entry.unwrap();
-                        let metadata = file.metadata();
-                        if metadata.is_ok() {
-                            let now = SystemTime::now();
-                            let expiry = Duration::from_millis(1209600000);
-                            let created = metadata.unwrap().created().unwrap_or(now);
-                            if created.elapsed().unwrap_or(Duration::from_millis(0)) >= expiry {
-                                let _ = fs::remove_file(file.path()); // automatically clean up 2 week old builds
-                            }
-                        }
-                    }
-                }
-            }
-            sleep(duration).await;
+            betas::cleanup().await;
+            sleep(Duration::from_millis(3600000)).await;
+        }
+    });
+
+    task::spawn(async {
+        loop {
+            streams::refresh_streams().await;
+            sleep(Duration::from_millis(300000)).await;
         }
     });
 
@@ -249,9 +208,11 @@ async fn main() -> std::io::Result<()> {
             .app_data(PayloadConfig::new(10000000))
             .service(get_item_pricing_v2)
             .service(get_active_perks)
-            .service(get_item_attributes)
-            .service(get_api_usage)
+            .service(get_non_placeable)
+            .service(get_museum_data)
+            .service(get_item_textures)
             .service(post_beta_build)
+            .service(get_skyblock_streams)
     })
     .bind(("0.0.0.0", get_port()))?
     .run()

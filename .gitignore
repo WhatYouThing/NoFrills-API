@@ -1,3 +1,4 @@
 /target
 .env
+versions.json
 Cargo.lock

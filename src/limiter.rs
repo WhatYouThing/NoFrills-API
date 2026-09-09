@@ -34,7 +34,7 @@ pub async fn get() -> MutexGuard<'static, HashMap<String, Vec<Limit>>> {
     return map;
 }
 
-pub fn get_ip(request: HttpRequest) -> String {
+pub fn get_ip(request: &HttpRequest) -> String {
     if env::var("NF_API_CLOUDFLARE").is_ok_and(|var| var.eq("true")) {
         return request
             .headers()
@@ -53,7 +53,7 @@ pub fn get_ip(request: HttpRequest) -> String {
     }
 }
 
-pub async fn new_key(endpoint: &str, request: HttpRequest) -> String {
+pub async fn new_key(endpoint: &str, request: &HttpRequest) -> String {
     let key = format!("{}+{}", endpoint, get_ip(request));
     let mut map = get().await;
     if !map.contains_key(&key) {
