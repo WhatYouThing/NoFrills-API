@@ -5,6 +5,7 @@ use std::{
 
 use actix_web::{HttpRequest, Responder, dev::Response, http::StatusCode, web::Bytes};
 use serde_json::json;
+use ureq::http::HeaderValue;
 
 use crate::util;
 
@@ -73,10 +74,13 @@ pub async fn post(payload: Bytes, req: HttpRequest) -> impl Responder {
                     }
                 ]
             });
-            util::get_http_agent()
-                .post(webhook.unwrap())
-                .send(payload.to_string())
-                .unwrap();
+            let mut builder = util::get_http_agent().post(webhook.unwrap());
+            let headers = builder.headers_mut().unwrap();
+            headers.insert(
+                "Content-Type",
+                HeaderValue::from_str("application/json").unwrap(),
+            );
+            let _ = builder.send(payload.to_string()).unwrap();
             return Response::ok();
         }
     }
