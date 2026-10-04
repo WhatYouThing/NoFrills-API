@@ -1,9 +1,6 @@
-use std::{
-    env,
-    io::Read,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{env, io::Read};
 
+use actix_web::dev::ServiceRequest;
 use base64::{Engine, engine::general_purpose};
 use crab_nbt::NbtCompound;
 use dotenvy::dotenv;
@@ -25,11 +22,23 @@ pub async fn make_request(url: &str) -> Result<ureq::http::Response<ureq::Body>,
         .call();
 }
 
-pub fn get_timestamp() -> u128 {
-    return SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+pub fn get_request_ip(req: &ServiceRequest) -> String {
+    if env::var("NF_API_CLOUDFLARE").is_ok_and(|v| v.eq("true")) {
+        return req
+            .headers()
+            .get("cf-connecting-ip")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+    } else {
+        return req
+            .connection_info()
+            .peer_addr()
+            .or(Some("unknown"))
+            .unwrap()
+            .to_string();
+    }
 }
 
 pub fn load_env_file() {

@@ -1,29 +1,30 @@
 mod betas;
 mod election;
 mod items;
-mod limiter;
 mod pricing;
 mod streams;
 mod util;
 
 use actix_web::{
-    App, HttpRequest, HttpServer, Responder,
+    App, HttpRequest, HttpResponse, HttpServer, Responder,
     body::BoxBody,
-    dev::Response,
+    dev::{Response, ServiceRequest, ServiceResponse},
     get,
     http::{
         StatusCode,
         header::{CONTENT_TYPE, HeaderValue},
     },
-    middleware,
+    middleware::{self, Next},
     mime::APPLICATION_JSON,
     post,
     web::{Bytes, PayloadConfig},
 };
-use serde_json::json;
+use actix_web_ratelimit::{RateLimit, config::RateLimitConfig, store::MemoryStore};
+use serde_json::{Value, json};
 use std::{
     env::{self, current_dir},
     fs,
+    sync::Arc,
     time::Duration,
 };
 use tokio::{task, time::sleep};
@@ -44,88 +45,70 @@ fn response_ok(body: BoxBody) -> Response<BoxBody> {
     return res;
 }
 
-async fn authenticate(req: &HttpRequest) -> bool {
+fn find_version(list: &Vec<Value>, value: &str) -> bool {
+    return list
+        .iter()
+        .find(|v| v.as_str().unwrap().eq(value))
+        .is_some();
+}
+
+async fn authenticate(
+    req: ServiceRequest,
+    next: Next<BoxBody>,
+) -> Result<ServiceResponse<BoxBody>, actix_web::Error> {
+    if req.path().starts_with("/v1/misc/") {
+        return next.call(req).await;
+    }
     let headers = req.headers();
     let mod_ver = headers
         .get("X-NoFrills-ModVer")
-        .map(|h| h.to_str().unwrap_or(""));
+        .map(|h| h.to_str().unwrap_or(""))
+        .unwrap_or("");
     let game_ver = headers
         .get("X-NoFrills-GameVer")
-        .map(|h| h.to_str().unwrap_or(""));
-    if mod_ver.is_none() || game_ver.is_none() {
-        return false;
-    }
+        .map(|h| h.to_str().unwrap_or(""))
+        .unwrap_or("");
     let path = current_dir().unwrap().join("versions.json");
     if !fs::exists(&path).unwrap_or(false) {
-        let _ = fs::write(&path, json!({"mod": [],"mc": []}).to_string()).unwrap();
+        let json = json!({
+            "mod": [],
+            "mc": []
+        });
+        let _ = fs::write(&path, json.to_string()).unwrap();
     }
     let file = fs::read_to_string(&path).unwrap();
     if let Some(json) = util::parse_json_str(&file) {
         let mod_versions = json["mod"].as_array().unwrap();
         let mc_versions = json["mc"].as_array().unwrap();
-        return mod_versions.contains(&json!(mod_ver.unwrap()))
-            && mc_versions.contains(&json!(game_ver.unwrap()));
+        if find_version(mod_versions, mod_ver) && find_version(mc_versions, game_ver) {
+            return next.call(req).await;
+        }
     }
-    return false;
+    return Ok(req.into_response(HttpResponse::Unauthorized().finish()));
 }
 
 #[get("/v2/economy/get-item-pricing/")]
-async fn get_item_pricing_v2(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-item-pricing", &req).await;
-    if limiter::is_limited(&key, 10000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    if !authenticate(&req).await {
-        return Response::new(StatusCode::UNAUTHORIZED);
-    }
+async fn get_item_pricing_v2(_: HttpRequest) -> impl Responder {
     return response_ok(pricing::get_pricing_json().await);
 }
 
 #[get("/v1/election/get-active-perks/")]
-async fn get_active_perks(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-active-perks", &req).await;
-    if limiter::is_limited(&key, 10000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    if !authenticate(&req).await {
-        return Response::new(StatusCode::UNAUTHORIZED);
-    }
+async fn get_active_perks(_: HttpRequest) -> impl Responder {
     return response_ok(election::get_perks_json().await);
 }
 
 #[get("/v1/items/get-non-placeable/")]
-async fn get_non_placeable(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-non-placeable", &req).await;
-    if limiter::is_limited(&key, 10000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    if !authenticate(&req).await {
-        return Response::new(StatusCode::UNAUTHORIZED);
-    }
+async fn get_non_placeable(_: HttpRequest) -> impl Responder {
     return response_ok(items::get_non_placeable_json().await);
 }
 
 #[get("/v1/items/get-museum-data/")]
-async fn get_museum_data(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-museum-data", &req).await;
-    if limiter::is_limited(&key, 10000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    if !authenticate(&req).await {
-        return Response::new(StatusCode::UNAUTHORIZED);
-    }
+async fn get_museum_data(_: HttpRequest) -> impl Responder {
     return response_ok(items::get_museum_data_json().await);
 }
 
 #[get("/v1/items/get-item-textures/")]
-async fn get_item_textures(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-item-textures", &req).await;
-    if limiter::is_limited(&key, 10000, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
-    if !authenticate(&req).await {
-        return Response::new(StatusCode::UNAUTHORIZED);
-    }
+async fn get_item_textures(_: HttpRequest) -> impl Responder {
     if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("skyblockItemTextures.json")) {
         return response_ok(BoxBody::new(file));
     }
@@ -138,11 +121,7 @@ async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
 }
 
 #[get("/v1/misc/get-skyblock-streams/")]
-async fn get_skyblock_streams(req: HttpRequest) -> impl Responder {
-    let key = limiter::new_key("get-skyblock-streams", &req).await;
-    if limiter::is_limited(&key, 200, 1).await {
-        return Response::new(StatusCode::TOO_MANY_REQUESTS);
-    }
+async fn get_skyblock_streams(_: HttpRequest) -> impl Responder {
     return response_ok(streams::get_streams_json().await);
 }
 
@@ -202,10 +181,18 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
+            .app_data(PayloadConfig::new(2000000))
+            .wrap(middleware::from_fn(authenticate))
+            .wrap(RateLimit::new(
+                RateLimitConfig::default()
+                    .max_requests(6)
+                    .window_secs(30)
+                    .id(|req| util::get_request_ip(req)),
+                Arc::new(MemoryStore::new()),
+            ))
             .wrap(middleware::NormalizePath::new(
                 middleware::TrailingSlash::Always,
             ))
-            .app_data(PayloadConfig::new(10000000))
             .service(get_item_pricing_v2)
             .service(get_active_perks)
             .service(get_non_placeable)
