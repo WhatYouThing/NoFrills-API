@@ -17,8 +17,7 @@ use actix_web::{
     },
     middleware::{self, Next},
     mime::APPLICATION_JSON,
-    post,
-    web::{Bytes, PayloadConfig, Query},
+    web::{self, Bytes, PayloadConfig, Query},
 };
 use actix_web_ratelimit::{RateLimit, config::RateLimitConfig, store::MemoryStore};
 use serde_json::{Value, json};
@@ -119,7 +118,6 @@ async fn get_item_textures(_: HttpRequest) -> impl Responder {
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[post("/v1/misc/post-beta-build")]
 async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
     return betas::post(payload, req).await;
 }
@@ -204,7 +202,6 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
-            .app_data(PayloadConfig::new(2000000))
             .wrap(middleware::from_fn(authenticate))
             .wrap(RateLimit::new(
                 RateLimitConfig::default()
@@ -221,7 +218,11 @@ async fn main() -> std::io::Result<()> {
             .service(get_non_placeable)
             .service(get_museum_data)
             .service(get_item_textures)
-            .service(post_beta_build)
+            .service(
+                web::resource("/v1/misc/post-beta-build")
+                    .app_data(PayloadConfig::new(10_000_000))
+                    .route(web::post().to(post_beta_build)),
+            )
             .service(get_skyblock_streams)
     })
     .bind(("0.0.0.0", get_port("NF_API_PORT")))?
