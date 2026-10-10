@@ -2,6 +2,7 @@ mod betas;
 mod election;
 mod items;
 mod pricing;
+mod proxy;
 mod streams;
 mod util;
 
@@ -17,7 +18,7 @@ use actix_web::{
     middleware::{self, Next},
     mime::APPLICATION_JSON,
     post,
-    web::{Bytes, PayloadConfig},
+    web::{Bytes, PayloadConfig, Query},
 };
 use actix_web_ratelimit::{RateLimit, config::RateLimitConfig, store::MemoryStore};
 use serde_json::{Value, json};
@@ -29,11 +30,14 @@ use std::{
 };
 use tokio::{task, time::sleep};
 
-fn get_port() -> u16 {
-    if let Ok(port_secret) = env::var("NF_API_PORT") {
+fn get_port(key: &str) -> u16 {
+    if let Ok(port_secret) = env::var(key) {
         return port_secret.parse().unwrap();
     }
-    return 4269;
+    return match key {
+        "NF_API_PORT" => 4269,
+        _ => 4270,
+    };
 }
 
 fn response_ok(body: BoxBody) -> Response<BoxBody> {
@@ -87,27 +91,27 @@ async fn authenticate(
     return Ok(req.into_response(HttpResponse::Unauthorized().finish()));
 }
 
-#[get("/v2/economy/get-item-pricing/")]
+#[get("/v2/economy/get-item-pricing")]
 async fn get_item_pricing_v2(_: HttpRequest) -> impl Responder {
     return response_ok(pricing::get_pricing_json().await);
 }
 
-#[get("/v1/election/get-active-perks/")]
+#[get("/v1/election/get-active-perks")]
 async fn get_active_perks(_: HttpRequest) -> impl Responder {
     return response_ok(election::get_perks_json().await);
 }
 
-#[get("/v1/items/get-non-placeable/")]
+#[get("/v1/items/get-non-placeable")]
 async fn get_non_placeable(_: HttpRequest) -> impl Responder {
     return response_ok(items::get_non_placeable_json().await);
 }
 
-#[get("/v1/items/get-museum-data/")]
+#[get("/v1/items/get-museum-data")]
 async fn get_museum_data(_: HttpRequest) -> impl Responder {
     return response_ok(items::get_museum_data_json().await);
 }
 
-#[get("/v1/items/get-item-textures/")]
+#[get("/v1/items/get-item-textures")]
 async fn get_item_textures(_: HttpRequest) -> impl Responder {
     if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("skyblockItemTextures.json")) {
         return response_ok(BoxBody::new(file));
@@ -115,14 +119,19 @@ async fn get_item_textures(_: HttpRequest) -> impl Responder {
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[post("/v1/misc/post-beta-build/")]
+#[post("/v1/misc/post-beta-build")]
 async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
     return betas::post(payload, req).await;
 }
 
-#[get("/v1/misc/get-skyblock-streams/")]
+#[get("/v1/misc/get-skyblock-streams")]
 async fn get_skyblock_streams(_: HttpRequest) -> impl Responder {
     return response_ok(streams::get_streams_json().await);
+}
+
+#[get("/{url:.*}")]
+async fn hypixel_proxy(req: HttpRequest, params: Query<proxy::Parameters>) -> impl Responder {
+    return proxy::handle(req, params).await;
 }
 
 #[actix_web::main]
@@ -179,6 +188,20 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
+    task::spawn(async {
+        let _ = HttpServer::new(|| {
+            App::new()
+                .wrap(middleware::NormalizePath::new(
+                    middleware::TrailingSlash::Trim,
+                ))
+                .service(hypixel_proxy)
+        })
+        .bind(("0.0.0.0", get_port("NF_API_PROXY_PORT")))
+        .unwrap()
+        .run()
+        .await;
+    });
+
     HttpServer::new(|| {
         App::new()
             .app_data(PayloadConfig::new(2000000))
@@ -191,7 +214,7 @@ async fn main() -> std::io::Result<()> {
                 Arc::new(MemoryStore::new()),
             ))
             .wrap(middleware::NormalizePath::new(
-                middleware::TrailingSlash::Always,
+                middleware::TrailingSlash::Trim,
             ))
             .service(get_item_pricing_v2)
             .service(get_active_perks)
@@ -201,7 +224,7 @@ async fn main() -> std::io::Result<()> {
             .service(post_beta_build)
             .service(get_skyblock_streams)
     })
-    .bind(("0.0.0.0", get_port()))?
+    .bind(("0.0.0.0", get_port("NF_API_PORT")))?
     .run()
     .await
 }
