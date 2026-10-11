@@ -6,7 +6,9 @@ use crab_nbt::NbtCompound;
 use dotenvy::dotenv;
 use flate2::bufread::GzDecoder;
 use serde_json::Value;
-use ureq::{Agent, Body, RequestBuilder, config::AutoHeaderValue, http::Response, typestate::WithoutBody};
+use ureq::{
+    Agent, Body, RequestBuilder, config::AutoHeaderValue, http::Response, typestate::WithoutBody,
+};
 
 pub fn get_http_agent() -> Agent {
     return Agent::config_builder()
@@ -16,9 +18,7 @@ pub fn get_http_agent() -> Agent {
 }
 
 pub fn build_request(url: &str) -> RequestBuilder<WithoutBody> {
-    return get_http_agent()
-        .get(format!("https://api.hypixel.net/{}", url))
-        .header("API-Key", env::var("HYPIXEL_API_KEY").unwrap());
+    return get_http_agent().get(format!("https://api.hypixel.net/{}", url));
 }
 
 pub async fn make_request(url: &str) -> Result<Response<Body>, ureq::Error> {

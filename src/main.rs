@@ -2,7 +2,6 @@ mod betas;
 mod election;
 mod items;
 mod pricing;
-mod proxy;
 mod streams;
 mod util;
 
@@ -17,7 +16,7 @@ use actix_web::{
     },
     middleware::{self, Next},
     mime::APPLICATION_JSON,
-    web::{self, Bytes, PayloadConfig, Query},
+    web::{self, Bytes, PayloadConfig},
 };
 use actix_web_ratelimit::{RateLimit, config::RateLimitConfig, store::MemoryStore};
 use serde_json::{Value, json};
@@ -127,11 +126,6 @@ async fn get_skyblock_streams(_: HttpRequest) -> impl Responder {
     return response_ok(streams::get_streams_json().await);
 }
 
-#[get("/{url:.*}")]
-async fn hypixel_proxy(req: HttpRequest, params: Query<proxy::Parameters>) -> impl Responder {
-    return proxy::handle(req, params).await;
-}
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     util::load_env_file();
@@ -184,20 +178,6 @@ async fn main() -> std::io::Result<()> {
             streams::refresh_streams().await;
             sleep(Duration::from_millis(300000)).await;
         }
-    });
-
-    task::spawn(async {
-        let _ = HttpServer::new(|| {
-            App::new()
-                .wrap(middleware::NormalizePath::new(
-                    middleware::TrailingSlash::Trim,
-                ))
-                .service(hypixel_proxy)
-        })
-        .bind(("0.0.0.0", get_port("NF_API_PROXY_PORT")))
-        .unwrap()
-        .run()
-        .await;
     });
 
     HttpServer::new(|| {
