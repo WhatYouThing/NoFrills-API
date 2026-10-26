@@ -28,14 +28,8 @@ use std::{
 };
 use tokio::{task, time::sleep};
 
-fn get_port(key: &str) -> u16 {
-    if let Ok(port_secret) = env::var(key) {
-        return port_secret.parse().unwrap();
-    }
-    return match key {
-        "NF_API_PORT" => 4269,
-        _ => 4270,
-    };
+fn get_port() -> u16 {
+    return env::var("NF_API_PORT").unwrap().parse().unwrap();
 }
 
 fn response_ok(body: BoxBody) -> Response<BoxBody> {
@@ -112,6 +106,14 @@ async fn get_museum_data(_: HttpRequest) -> impl Responder {
 #[get("/v1/items/get-item-textures")]
 async fn get_item_textures(_: HttpRequest) -> impl Responder {
     if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("skyblockItemTextures.json")) {
+        return response_ok(BoxBody::new(file));
+    }
+    return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[get("/v1/data/middle-click-list")]
+async fn middle_click_list(_: HttpRequest) -> impl Responder {
+    if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("middleClickOverrideLists.json")) {
         return response_ok(BoxBody::new(file));
     }
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
@@ -198,6 +200,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_non_placeable)
             .service(get_museum_data)
             .service(get_item_textures)
+            .service(middle_click_list)
             .service(
                 web::resource("/v1/misc/post-beta-build")
                     .app_data(PayloadConfig::new(10_000_000))
@@ -205,7 +208,7 @@ async fn main() -> std::io::Result<()> {
             )
             .service(get_skyblock_streams)
     })
-    .bind(("0.0.0.0", get_port("NF_API_PORT")))?
+    .bind(("0.0.0.0", get_port()))?
     .run()
     .await
 }
