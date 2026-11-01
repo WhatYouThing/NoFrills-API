@@ -17,7 +17,7 @@ pub async fn post(form: MultipartForm<BetaUploadForm>, req: HttpRequest) -> impl
     }
     let header = req
         .headers()
-        .get("NF-Beta-Auth")
+        .get("nf-beta-auth")
         .map(|h| h.to_str().unwrap_or(""))
         .unwrap_or("");
     if header.is_empty() {
@@ -60,6 +60,7 @@ pub async fn post(form: MultipartForm<BetaUploadForm>, req: HttpRequest) -> impl
             let _ = builder.send(payload.to_string()).unwrap();
             return Response::ok();
         }
+        return Response::internal_server_error();
     }
     return Response::new(StatusCode::UNAUTHORIZED);
 }
