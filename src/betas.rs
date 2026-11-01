@@ -3,78 +3,55 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use actix_web::{HttpRequest, Responder, dev::Response, http::StatusCode, web::Bytes};
+use actix_multipart::form::MultipartForm;
+use actix_web::{HttpRequest, Responder, dev::Response, http::StatusCode};
 use serde_json::json;
 use ureq::http::HeaderValue;
 
-use crate::util;
+use crate::{BetaUploadForm, util};
 
-pub async fn post(payload: Bytes, req: HttpRequest) -> impl Responder {
-    let auth_key = env::var("NF_API_BETA_AUTH");
-    if auth_key.is_err() {
+pub async fn post(form: MultipartForm<BetaUploadForm>, req: HttpRequest) -> impl Responder {
+    let auth_key = env::var("NF_API_BETA_AUTH").unwrap_or("".to_owned());
+    if auth_key.is_empty() {
         return Response::internal_server_error();
     }
-    let header = req.headers().get("nf-beta-auth");
-    if header.is_none() {
+    let header = req
+        .headers()
+        .get("NF-Beta-Auth")
+        .map(|h| h.to_str().unwrap_or(""))
+        .unwrap_or("");
+    if header.is_empty() {
         return Response::new(StatusCode::BAD_REQUEST);
     }
-    let header_value = header.unwrap().to_str().unwrap_or("");
-    if header_value.eq(&auth_key.unwrap()) {
-        let path = env::var("NF_API_BETA_PATH");
-        let webhook = env::var("NF_API_BETA_WEBHOOK");
-        if path.is_err() || webhook.is_err() {
+    if header.eq(&auth_key) {
+        let path = env::var("NF_API_BETA_PATH").unwrap_or("".to_owned());
+        let webhook = env::var("NF_API_BETA_WEBHOOK").unwrap_or("".to_owned());
+        if path.is_empty() || webhook.is_empty() {
             return Response::internal_server_error();
         }
-        let data = String::from_utf8(payload.to_vec());
-        if data.is_err() {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let json = util::parse_json_str(&data.unwrap());
-        if json.is_none() {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let body = json.unwrap();
-        let hash = body["hash"].as_str().unwrap_or("");
-        let version = body["version"].as_str().unwrap_or("");
-        let message = body["message"].as_str().unwrap_or("");
-        let branch = body["branch"].as_str().unwrap_or("");
-        let bytes = body["bytes"].as_array();
-        if hash.is_empty()
-            || version.is_empty()
-            || message.is_empty()
-            || branch.is_empty()
-            || bytes.is_none()
-        {
-            return Response::new(StatusCode::BAD_REQUEST);
-        }
-        let bytes_raw: Vec<u8> = bytes
-            .unwrap()
-            .iter()
-            .map(|byte| byte.as_u64().unwrap() as u8)
-            .collect(); // converts serde_json values to raw bytes
-        let hash_short = hash.split_at(8).0;
-        let file_name = format!("nofrills-{}-{}.jar", version, hash_short);
-        if let Ok(_) = fs::write(format!("{}/{}", path.unwrap(), file_name), bytes_raw) {
+        let hash_short = form.hash.split_at(8).0;
+        let file_name = format!("nofrills-{}-{}.jar", *form.version, hash_short);
+        if let Ok(_) = fs::copy(form.file.file.path(), format!("{}/{}", path, file_name)) {
             let payload = json!({
                 "embeds": [
                     {
-                        "title": format!("Beta Build for Minecraft {}", version),
+                        "title": format!("Beta Build for Minecraft {}", *form.version),
                         "description": format!("[**Click here to download**]({})\n\nBranch: `{}`\nCommit: [`{}`]({})\n\nChanges\n```{}```",
                             format!("https://whatyouth.ing/beta/{}", file_name),
-                            branch,
+                            *form.branch,
                             hash_short,
-                            format!("https://github.com/WhatYouThing/NoFrills/commit/{}", hash),
-                            if message.len() > 1000 {
-                                message.split_at(1000).0
+                            format!("https://github.com/WhatYouThing/NoFrills/commit/{}", *form.hash),
+                            if form.message.len() > 1000 {
+                                form.message.split_at(1000).0.to_owned()
                             } else {
-                                message
+                                (*form.message).to_owned()
                             }
                         ),
                         "color": 0x5ca0bf
                     }
                 ]
             });
-            let mut builder = util::get_http_agent().post(webhook.unwrap());
+            let mut builder = util::get_http_agent().post(webhook);
             let headers = builder.headers_mut().unwrap();
             headers.insert(
                 "Content-Type",

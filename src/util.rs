@@ -1,4 +1,4 @@
-use std::{env, io::Read};
+use std::io::Read;
 
 use actix_web::dev::ServiceRequest;
 use base64::{Engine, engine::general_purpose};
@@ -26,22 +26,16 @@ pub async fn make_request(url: &str) -> Result<Response<Body>, ureq::Error> {
 }
 
 pub fn get_request_ip(req: &ServiceRequest) -> String {
-    if env::var("NF_API_CLOUDFLARE").is_ok_and(|v| v.eq("true")) {
-        return req
-            .headers()
-            .get("cf-connecting-ip")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-    } else {
-        return req
-            .connection_info()
-            .peer_addr()
-            .or(Some("unknown"))
-            .unwrap()
-            .to_string();
+    let headers = req.headers();
+    if let Some(ip) = headers.get("cf-connecting-ip") {
+        if let Ok(ip_str) = ip.to_str() {
+            return ip_str.to_owned();
+        }
     }
+    if let Some(addr) = req.connection_info().peer_addr() {
+        return addr.to_owned();
+    }
+    return "unknown".to_owned();
 }
 
 pub fn load_env_file() {

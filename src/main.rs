@@ -5,6 +5,7 @@ mod pricing;
 mod streams;
 mod util;
 
+use actix_multipart::form::{MultipartForm, tempfile::TempFile, text::Text};
 use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder,
     body::BoxBody,
@@ -16,7 +17,7 @@ use actix_web::{
     },
     middleware::{self, Next},
     mime::APPLICATION_JSON,
-    web::{self, Bytes, PayloadConfig},
+    web::{self, PayloadConfig},
 };
 use actix_web_ratelimit::{RateLimit, config::RateLimitConfig, store::MemoryStore};
 use serde_json::{Value, json};
@@ -27,6 +28,16 @@ use std::{
     time::Duration,
 };
 use tokio::{task, time::sleep};
+
+#[derive(Debug, MultipartForm)]
+struct BetaUploadForm {
+    #[multipart(limit = "10MB")]
+    file: TempFile,
+    hash: Text<String>,
+    version: Text<String>,
+    branch: Text<String>,
+    message: Text<String>
+}
 
 fn get_port() -> u16 {
     return env::var("NF_API_PORT").unwrap().parse().unwrap();
@@ -119,8 +130,8 @@ async fn middle_click_list(_: HttpRequest) -> impl Responder {
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-async fn post_beta_build(payload: Bytes, req: HttpRequest) -> impl Responder {
-    return betas::post(payload, req).await;
+async fn post_beta_build(form: MultipartForm<BetaUploadForm>, req: HttpRequest) -> impl Responder {
+    return betas::post(form, req).await;
 }
 
 #[get("/v1/misc/get-skyblock-streams")]
