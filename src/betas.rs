@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    fs::{self, File},
+    io,
     time::{Duration, SystemTime},
 };
 
@@ -31,7 +33,8 @@ pub async fn post(form: MultipartForm<BetaUploadForm>, req: HttpRequest) -> impl
         }
         let hash_short = form.hash.split_at(8).0;
         let file_name = format!("nofrills-{}-{}.jar", *form.version, hash_short);
-        if let Ok(_) = fs::copy(form.file.file.path(), format!("{}/{}", path, file_name)) {
+        let mut new_file = File::create(format!("{}/{}", path, file_name)).unwrap();
+        if let Ok(_) = io::copy(&mut form.file.file.as_file(), &mut new_file) {
             let payload = json!({
                 "embeds": [
                     {

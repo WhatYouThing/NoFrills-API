@@ -36,7 +36,7 @@ struct BetaUploadForm {
     hash: Text<String>,
     version: Text<String>,
     branch: Text<String>,
-    message: Text<String>
+    message: Text<String>,
 }
 
 fn get_port() -> u16 {
@@ -116,7 +116,8 @@ async fn get_museum_data(_: HttpRequest) -> impl Responder {
 
 #[get("/v1/items/get-item-textures")]
 async fn get_item_textures(_: HttpRequest) -> impl Responder {
-    if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("skyblockItemTextures.json")) {
+    let path = current_dir().unwrap().join("skyblockItemTextures.json");
+    if let Ok(file) = fs::read_to_string(path) {
         return response_ok(BoxBody::new(file));
     }
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
@@ -124,7 +125,8 @@ async fn get_item_textures(_: HttpRequest) -> impl Responder {
 
 #[get("/v1/data/middle-click-list")]
 async fn middle_click_list(_: HttpRequest) -> impl Responder {
-    if let Ok(file) = fs::read_to_string(current_dir().unwrap().join("middleClickOverrideLists.json")) {
+    let path = current_dir().unwrap().join("middleClickOverrideLists.json");
+    if let Ok(file) = fs::read_to_string(path) {
         return response_ok(BoxBody::new(file));
     }
     return Response::new(StatusCode::INTERNAL_SERVER_ERROR);
