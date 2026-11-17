@@ -36,7 +36,8 @@
         "Heart of the (?:Forest|Mountain)(?:| Slot)",
         "(?:|\\([0-9]*/[0-9]*\\) )Widgets .*",
         "Crop Analyzer",
-        "Gemstone Grinder"
+        "Gemstone Grinder",
+        "(?:|\\([0-9]*/[0-9]*\\) ) Accessory Bag"
     ],
     "whitelist": [
         "Stats & Equipment",
